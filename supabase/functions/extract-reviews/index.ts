@@ -1,10 +1,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+// CORS helper function to get appropriate headers based on origin
+function getCorsHeaders(origin: string | null): HeadersInit {
+  const allowedOrigins = [
+    "https://service-sift.com",
+    "https://www.service-sift.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
+  ];
+
+  // Use the request origin if it's allowed, otherwise use wildcard
+  const allowOrigin = origin && allowedOrigins.includes(origin) ? origin : "*";
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, apikey, Apikey",
+    "Access-Control-Max-Age": "86400", // 24 hours
+  };
+}
 
 interface ExtractRequest {
   url: string;
@@ -26,6 +40,9 @@ interface ApifyResponse {
 }
 
 Deno.serve(async (req: Request) => {
+  const origin = req.headers.get("origin");
+  const corsHeaders = getCorsHeaders(origin);
+
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 200,

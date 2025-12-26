@@ -1,157 +1,68 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import Stripe from "npm:stripe@17.5.0";
-import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import Stripe from 'npm:stripe@17.4.0'
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
-
-interface CheckoutRequest {
-  amount: number;
-  businessName: string;
-  isReanalysis: boolean;
-  url: string;
-  businessId?: string;
+  'Access-Control-Allow-Origin': 'https://service-sift.com',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-Deno.serve(async (req: Request) => {
-  console.log('[create-checkout] Request received:', req.method);
-
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: corsHeaders,
-    });
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders })
   }
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    console.log('[create-checkout] Auth header present:', !!authHeader);
-
+    // Get auth token
+    const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
-      throw new Error("Missing authorization header");
+      throw new Error('No authorization header')
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    // Create Supabase client
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('ANON_KEY') ?? ''
+    const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-    console.log('[create-checkout] Environment check:', {
-      hasSupabaseUrl: !!supabaseUrl,
-      hasAnonKey: !!supabaseAnonKey,
-      hasStripeKey: !!Deno.env.get("STRIPE_SECRET_KEY"),
-    });
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error("Supabase environment not configured");
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: { Authorization: authHeader },
-      },
-    });
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    console.log('[create-checkout] Auth check:', {
-      authenticated: !!user,
-      userId: user?.id,
-      error: authError?.message,
-    });
-
+    // Extract token and verify user
+    const token = authHeader.replace('Bearer ', '')
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
     if (authError || !user) {
-      throw new Error("Unauthorized");
+      throw new Error('Authentication failed')
     }
 
-    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-    if (!stripeSecretKey) {
-      throw new Error("Stripe secret key not configured");
-    }
+    // Get request body
+    const { businessName, amount, isReanalysis, url, businessId } = await req.json()
 
-    const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: "2024-12-18.acacia",
-    });
-
-    const { amount, businessName, isReanalysis, url, businessId }: CheckoutRequest = await req.json();
-
-    console.log('[create-checkout] Request data:', {
-      amount,
-      businessName,
-      isReanalysis,
-      url,
-      businessId,
-    });
-
-    const origin = req.headers.get("origin") || "http://localhost:5173";
-    console.log('[create-checkout] Origin:', origin);
-
-    const successParams = new URLSearchParams({
-      session_id: "{CHECKOUT_SESSION_ID}",
-      url: encodeURIComponent(url),
-    });
-
-    if (businessId) {
-      successParams.set("businessId", businessId);
-    }
-
-    console.log('[create-checkout] Creating Stripe session...');
+    // Create Stripe checkout
+    const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
+      apiVersion: '2024-11-20.acacia',
+    })
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: isReanalysis ? `ServiceSift Re-Analysis: ${businessName}` : `ServiceSift Analysis: ${businessName}`,
-              description: isReanalysis ? "Updated review analysis" : "Complete review analysis",
-            },
-            unit_amount: amount,
-          },
-          quantity: 1,
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `${businessName} Analysis` },
+          unit_amount: Math.round(amount * 100),
         },
-      ],
-      mode: "payment",
-      success_url: `${origin}/?${successParams.toString()}`,
-      cancel_url: `${origin}/`,
-    });
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `https://service-sift.com/dashboard?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: 'https://service-sift.com/dashboard',
+      metadata: { userId: user.id, businessName, isReanalysis, url, businessId },
+    })
 
-    console.log('[create-checkout] Session created:', {
-      sessionId: session.id,
-      url: session.url,
-    });
-
-    if (!session.url) {
-      console.error('[create-checkout] Stripe session created but URL is null/undefined');
-      throw new Error('Stripe did not generate a checkout URL. This usually means the Stripe API key is invalid or the request parameters are incorrect.');
-    }
-
-    return new Response(
-      JSON.stringify({ sessionId: session.id, url: session.url }),
-      {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    return new Response(JSON.stringify({ url: session.url }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
   } catch (error) {
-    console.error('[create-checkout] Error:', error);
-
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    const statusCode = errorMessage.includes("Unauthorized") || errorMessage.includes("authorization") ? 401 : 400;
-
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      {
-        status: statusCode,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
   }
-});
+})

@@ -37,25 +37,18 @@ export async function createCheckoutSession(
 
   console.log('[Stripe] User authenticated:', { userId: user.id });
 
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  if (!supabaseUrl) {
-    console.error('[Stripe] VITE_SUPABASE_URL is not set');
-    throw new Error('Supabase URL is not configured');
-  }
-
-  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/create-checkout`;
-  console.log('[Stripe] Edge function URL:', edgeFunctionUrl);
+  const apiUrl = '/api/create-checkout';
+  console.log('[Stripe] API route URL:', apiUrl);
   console.log('[Stripe] Environment check:', {
     hasSupabaseUrl: !!import.meta.env.VITE_SUPABASE_URL,
     hasAnonKey: !!import.meta.env.VITE_SUPABASE_ANON_KEY,
   });
 
   try {
-    const response = await fetch(edgeFunctionUrl, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY, // <-- add this
         Authorization: `Bearer ${refreshedSession.access_token}`,
       },
       
