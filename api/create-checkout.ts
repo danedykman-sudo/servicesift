@@ -78,7 +78,7 @@ export default async function handler(req: any, res: any) {
         price_data: {
           currency: 'usd',
           product_data: { name: `${businessName} Analysis` },
-          unit_amount: Math.round(amount * 100),
+          unit_amount: Math.round(amount),
         },
         quantity: 1,
       }],
