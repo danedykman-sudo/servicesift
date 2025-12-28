@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-export const FIRST_ANALYSIS_PRICE = 4900;
+export const FIRST_ANALYSIS_PRICE = 50;
 export const REANALYSIS_PRICE = 1000;
 
 export async function createCheckoutSession(
@@ -8,7 +8,8 @@ export async function createCheckoutSession(
   businessName: string,
   isReanalysis: boolean,
   url: string,
-  businessId?: string
+  businessId: string | undefined,
+  analysisId: string
 ): Promise<{ sessionId: string; url: string }> {
   console.log('[Stripe] Creating checkout session:', {
     amount,
@@ -16,6 +17,7 @@ export async function createCheckoutSession(
     isReanalysis,
     url,
     businessId,
+    analysisId,
   });
 
   console.log('[Stripe] Refreshing session to ensure valid token...');
@@ -58,6 +60,7 @@ export async function createCheckoutSession(
         isReanalysis,
         url,
         businessId,
+        analysisId,
       }),
     });
 

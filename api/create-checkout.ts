@@ -53,11 +53,17 @@ export default async function handler(req: any, res: any) {
     }
 
     // Get request body
-    const { businessName, amount, isReanalysis, url, businessId } = req.body;
+    const { businessName, amount, isReanalysis, url, businessId, analysisId } = req.body;
 
     if (!businessName || !amount || url === undefined) {
       res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // analysisId is required for webhook to mark payment as complete
+    if (!analysisId) {
+      res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
+      return res.status(400).json({ error: 'analysisId is required' });
     }
 
     // Initialize Stripe
@@ -68,7 +74,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: '2024-11-20.acacia',
+      apiVersion: '2025-12-15.clover',
     });
 
     // Create Stripe checkout session
@@ -78,14 +84,18 @@ export default async function handler(req: any, res: any) {
         price_data: {
           currency: 'usd',
           product_data: { name: `${businessName} Analysis` },
-          unit_amount: Math.round(amount),
+          unit_amount: amount || 50, // $0.50 for initial analysis
+
         },
         quantity: 1,
       }],
       mode: 'payment',
-      success_url: `https://service-sift.com/dashboard?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: 'https://service-sift.com/dashboard?session_id={CHECKOUT_SESSION_ID}',
       cancel_url: 'https://service-sift.com/dashboard',
+      // Include analysisId in both metadata and client_reference_id for webhook lookup
+      client_reference_id: analysisId,
       metadata: { 
+        analysisId: analysisId, // Required for webhook to update payment status
         userId: user.id, 
         businessName, 
         isReanalysis: String(isReanalysis || false), 

@@ -29,6 +29,7 @@ interface Review {
 interface RequestBody {
   businessName: string;
   reviews: Review[];
+  traceId?: string;
 }
 
 interface RootCause {
@@ -79,7 +80,15 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { businessName, reviews }: RequestBody = await req.json();
+    const { businessName, reviews, traceId }: RequestBody = await req.json();
+    
+    // Log traceId at function start
+    console.log("[analyze-reviews] ===== FUNCTION START =====", {
+      traceId,
+      businessName,
+      reviewCount: reviews?.length || 0,
+      timestamp: new Date().toISOString()
+    });
 
     if (!businessName || !reviews || !Array.isArray(reviews)) {
       return new Response(
@@ -185,7 +194,12 @@ Rules:
 
     if (!claudeResponse.ok) {
       const errorText = await claudeResponse.text();
-      console.error("Claude API error:", errorText);
+      console.error("Claude API error:", {
+        traceId,
+        status: claudeResponse.status,
+        errorText: errorText.substring(0, 500),
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({ success: false, error: "Analysis service unavailable" }),
         {
@@ -222,8 +236,12 @@ Rules:
     try {
       analysis = JSON.parse(analysisText);
     } catch (parseError) {
-      console.error("JSON parsing error:", parseError);
-      console.error("Raw response:", analysisText);
+      console.error("JSON parsing error:", {
+        traceId,
+        parseError: parseError instanceof Error ? parseError.message : "Unknown parse error",
+        rawResponsePreview: analysisText.substring(0, 500),
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({ success: false, error: "Analysis failed" }),
         {
@@ -246,7 +264,21 @@ Rules:
       }
     );
   } catch (error) {
-    console.error("Error in analyzeReviews:", error);
+    // Try to extract traceId from request if available
+    let traceId: string | undefined;
+    try {
+      const requestBody = await req.clone().json().catch(() => null);
+      traceId = requestBody?.traceId;
+    } catch {
+      // Ignore - traceId may not be available
+    }
+    
+    console.error("Error in analyzeReviews:", {
+      traceId,
+      error: error instanceof Error ? error.message : "Unknown error",
+      stack: error instanceof Error ? error.stack : undefined,
+      timestamp: new Date().toISOString()
+    });
     return new Response(
       JSON.stringify({ success: false, error: "Internal server error" }),
       {

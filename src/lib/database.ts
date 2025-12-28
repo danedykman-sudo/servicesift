@@ -97,17 +97,72 @@ export async function getUserBusinesses(): Promise<BusinessWithLatestAnalysis[]>
     .from('businesses')
     .select(`
       *,
-      analyses(id, average_rating, created_at)
+      analyses(id, average_rating, created_at, status, payment_status, review_count, stripe_checkout_session_id)
     `)
     .order('created_at', { ascending: false });
 
   if (error) throw error;
 
-  return businesses.map((business: any) => ({
-    ...business,
-    latest_analysis: business.analyses?.[0] || null,
-    analysis_count: business.analyses?.length || 0,
-  }));
+  return businesses.map((business: any) => {
+    // HARD LINKING: Sort analyses with strict priority
+    // 1) status='completed' AND payment_status='paid' AND review_count > 0 (has results)
+    // 2) payment_status='paid' (paid but maybe not completed yet)
+    // 3) status='completed' (completed but maybe not paid - legacy)
+    // 4) created_at DESC (most recent)
+    const sortedAnalyses = (business.analyses || []).sort((a: any, b: any) => {
+      // Priority 1: Paid, completed, with results
+      const aHasResults = a.payment_status === 'paid' && a.status === 'completed' && a.review_count > 0;
+      const bHasResults = b.payment_status === 'paid' && b.status === 'completed' && b.review_count > 0;
+      
+      if (aHasResults && !bHasResults) return -1;
+      if (!aHasResults && bHasResults) return 1;
+      
+      // Priority 2: Paid (even if not completed yet)
+      const aIsPaid = a.payment_status === 'paid';
+      const bIsPaid = b.payment_status === 'paid';
+      
+      if (aIsPaid && !bIsPaid) return -1;
+      if (!aIsPaid && bIsPaid) return 1;
+      
+      // Priority 3: Completed (legacy)
+      const aIsCompleted = a.status === 'completed';
+      const bIsCompleted = b.status === 'completed';
+      
+      if (aIsCompleted && !bIsCompleted) return -1;
+      if (!aIsCompleted && bIsCompleted) return 1;
+      
+      // Priority 4: Most recent
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+
+    const latest = sortedAnalyses[0] || null;
+    
+    // Log if we're selecting a non-paid analysis when paid ones exist
+    if (latest && latest.payment_status !== 'paid') {
+      const paidExists = sortedAnalyses.some((a: any) => a.payment_status === 'paid');
+      if (paidExists) {
+        console.warn('[getUserBusinesses] Selected non-paid analysis when paid exists:', {
+          businessId: business.id,
+          selectedId: latest.id,
+          selectedStatus: latest.status,
+          selectedPaymentStatus: latest.payment_status,
+          paidAnalyses: sortedAnalyses.filter((a: any) => a.payment_status === 'paid').map((a: any) => ({
+            id: a.id,
+            status: a.status,
+            review_count: a.review_count
+          }))
+        });
+      }
+    }
+
+    return {
+      ...business,
+      latest_analysis: latest,
+      analysis_count: business.analyses?.length || 0,
+      // Include all analyses for manual trigger detection
+      analyses: business.analyses || [],
+    } as BusinessWithLatestAnalysis & { analyses: any[] };
+  });
 }
 
 export async function getBusinessByUrl(url: string): Promise<Business | null> {
@@ -179,30 +234,99 @@ export async function createAnalysis(
   averageRating: number,
   isBaseline: boolean,
   paymentId?: string | null,
-  amountPaid?: number
+  amountPaid?: number,
+  paymentStatus: 'pending' | 'paid' | 'failed' = 'paid',
+  callerContext?: string // For logging
 ): Promise<string> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
+  // LOGGING: Log all analysis insert attempts
+  const logContext = {
+    caller: callerContext || 'unknown',
+    businessId,
+    paymentId,
+    paymentStatus,
+    businessName,
+    timestamp: new Date().toISOString(),
+    stackTrace: new Error().stack
+  };
+  console.log('[createAnalysis] INSERT ATTEMPT:', logContext);
+
+  // HARD GUARD: If paymentStatus is 'paid', NEVER create a new analysis
+  // The analysis must already exist from the payment flow
+  if (paymentStatus === 'paid') {
+    console.error('[createAnalysis] CRITICAL: Attempted to create analysis with paymentStatus=paid', logContext);
+    throw new Error('Cannot create analysis with paymentStatus=paid. Analysis must exist from payment flow.');
+  }
+
+  // SAFETY CHECK: If paymentId (Stripe session ID) exists, check for existing analysis
+  // Check both payment_id and stripe_checkout_session_id columns
+  if (paymentId) {
+    const { data: existingByPaymentId } = await supabase
+      .from('analyses')
+      .select('id')
+      .eq('payment_id', paymentId)
+      .maybeSingle();
+    
+    const { data: existingBySessionId } = await supabase
+      .from('analyses')
+      .select('id')
+      .eq('stripe_checkout_session_id', paymentId)
+      .maybeSingle();
+    
+    if (existingByPaymentId || existingBySessionId) {
+      console.error('[createAnalysis] CRITICAL: Analysis already exists for payment session:', {
+        ...logContext,
+        existingByPaymentId: existingByPaymentId?.id,
+        existingBySessionId: existingBySessionId?.id
+      });
+      throw new Error('Analysis already exists for this payment. Do not create duplicate.');
+    }
+  }
+
+  const insertData: any = {
+    business_id: businessId,
+    user_id: user.id,
+    business_url: businessUrl,
+    business_name: businessName,
+    review_count: reviewCount,
+    average_rating: averageRating,
+    is_baseline: isBaseline,
+    payment_status: paymentStatus,
+    payment_id: paymentId,
+    amount_paid: amountPaid,
+  };
+
+  // Only set status and completed_at if payment is already paid
+  if (paymentStatus === 'paid') {
+    insertData.status = 'completed';
+    insertData.completed_at = new Date().toISOString();
+  } else {
+    // For pending payments, set status to pending
+    insertData.status = 'pending';
+  }
+
   const { data, error } = await supabase
     .from('analyses')
-    .insert({
-      business_id: businessId,
-      user_id: user.id,
-      business_url: businessUrl,
-      business_name: businessName,
-      review_count: reviewCount,
-      average_rating: averageRating,
-      is_baseline: isBaseline,
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      payment_id: paymentId,
-      amount_paid: amountPaid,
-    })
+    .insert(insertData)
     .select('id')
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('[createAnalysis] INSERT FAILED:', {
+      ...logContext,
+      error: error.message,
+      errorCode: error.code
+    });
+    throw error;
+  }
+
+  console.log('[createAnalysis] INSERT SUCCESS:', {
+    ...logContext,
+    analysisId: data.id
+  });
+
   return data.id;
 }
 
@@ -376,6 +500,21 @@ export async function getBaselineAnalysis(businessId: string): Promise<Analysis 
     .select('*')
     .eq('business_id', businessId)
     .eq('is_baseline', true)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Find existing analysis by Stripe checkout session ID
+ * Used to prevent duplicate analysis creation after payment
+ */
+export async function getAnalysisByStripeSessionId(sessionId: string): Promise<Analysis | null> {
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('*')
+    .eq('stripe_checkout_session_id', sessionId)
     .maybeSingle();
 
   if (error) throw error;

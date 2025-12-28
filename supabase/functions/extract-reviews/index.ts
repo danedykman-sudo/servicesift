@@ -23,6 +23,7 @@ function getCorsHeaders(origin: string | null): HeadersInit {
 interface ExtractRequest {
   url: string;
   maxReviews?: number;
+  traceId?: string;
 }
 
 interface ApifyReview {
@@ -51,7 +52,14 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { url, maxReviews = 200 }: ExtractRequest = await req.json();
+    const { url, maxReviews = 200, traceId }: ExtractRequest = await req.json();
+    
+    // Log traceId at function start
+    console.log("[extract-reviews] ===== FUNCTION START =====", {
+      traceId,
+      url: url?.substring(0, 50),
+      timestamp: new Date().toISOString()
+    });
 
     // Validate URL
     if (!url || (!url.includes("google.com/maps") && !url.includes("maps.app.goo.gl"))) {
@@ -131,8 +139,12 @@ Deno.serve(async (req: Request) => {
         const errorText = await primaryResponse.text();
         console.error("Primary actor HTTP error:", primaryResponse.status, errorText);
       }
-    } catch (error) {
-      console.error("Primary actor failed:", error);
+      } catch (error) {
+        console.error("Primary actor failed:", {
+          traceId,
+          error: error instanceof Error ? error.message : "Unknown error",
+          stack: error instanceof Error ? error.stack : undefined
+        });
     }
 
     // If primary actor returned no data, try fallback actor
@@ -168,7 +180,11 @@ Deno.serve(async (req: Request) => {
           console.error("Fallback actor HTTP error:", fallbackResponse.status, errorText);
         }
       } catch (error) {
-        console.error("Fallback actor failed:", error);
+        console.error("Fallback actor failed:", {
+          traceId,
+          error: error instanceof Error ? error.message : "Unknown error",
+          stack: error instanceof Error ? error.stack : undefined
+        });
       }
     }
 
@@ -287,7 +303,21 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (error) {
-    console.error("Error in extract-reviews function:", error);
+    // Try to extract traceId from request if available
+    let traceId: string | undefined;
+    try {
+      const requestBody = await req.clone().json().catch(() => null);
+      traceId = requestBody?.traceId;
+    } catch {
+      // Ignore - traceId may not be available
+    }
+    
+    console.error("Error in extract-reviews function:", {
+      traceId,
+      error: error instanceof Error ? error.message : "Unknown error",
+      stack: error instanceof Error ? error.stack : undefined,
+      timestamp: new Date().toISOString()
+    });
     return new Response(
       JSON.stringify({
         success: false,

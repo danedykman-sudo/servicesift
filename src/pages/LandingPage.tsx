@@ -7,6 +7,7 @@ import {
   getBusinessByUrl,
   getBusinessById,
   getBaselineAnalysis,
+  getAnalysisByStripeSessionId,
   createBusiness,
   createAnalysis,
   saveRootCauses,
@@ -15,9 +16,11 @@ import {
   saveBacklogTasks,
   saveReviews,
 } from '../lib/database';
+import { guardAgainstPostPaymentInsert } from '../lib/analysisGuard';
 import { compareAnalyses, saveDeltaAnalysis } from '../lib/deltaAnalysis';
 import { PaymentModal } from '../components/PaymentModal';
 import { FIRST_ANALYSIS_PRICE, REANALYSIS_PRICE } from '../lib/stripe';
+import { supabase } from '../lib/supabase';
 
 type ViewState = 'landing' | 'loading' | 'results' | 'extraction_error';
 type LoadingStage = 'fetching' | 'fallback' | 'analyzing';
@@ -108,6 +111,7 @@ export function LandingPage() {
   const [reanalysisBusinessName, setReanalysisBusinessName] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentSessionId, setPaymentSessionId] = useState<string | null>(null);
+  const [pendingAnalysisId, setPendingAnalysisId] = useState<string | null>(null);
 
   const headerRef = useRef<HTMLDivElement>(null);
   const rootCausesRef = useRef<HTMLDivElement>(null);
@@ -122,27 +126,30 @@ export function LandingPage() {
     }
   }, [searchParams, user]);
 
-  useEffect(() => {
-    const sessionId = searchParams.get('session_id');
-    const urlParam = searchParams.get('url');
-    const businessIdParam = searchParams.get('businessId');
+  // OLD PAYMENT FLOW - DISABLED
+  // Payment confirmation is now handled in Dashboard.tsx via /api/confirm-payment
+  // This prevents duplicate analysis creation
+  // useEffect(() => {
+  //   const sessionId = searchParams.get('session_id');
+  //   const urlParam = searchParams.get('url');
+  //   const businessIdParam = searchParams.get('businessId');
 
-    if (sessionId && urlParam) {
-      const decodedUrl = decodeURIComponent(urlParam);
-      setUrl(decodedUrl);
-      setPaymentSessionId(sessionId);
+  //   if (sessionId && urlParam) {
+  //     const decodedUrl = decodeURIComponent(urlParam);
+  //     setUrl(decodedUrl);
+  //     setPaymentSessionId(sessionId);
 
-      if (businessIdParam) {
-        setReanalysisBusinessId(businessIdParam);
-        setIsReanalysis(true);
-        loadBusinessForReanalysis(businessIdParam);
-      }
+  //     if (businessIdParam) {
+  //       setReanalysisBusinessId(businessIdParam);
+  //       setIsReanalysis(true);
+  //       loadBusinessForReanalysis(businessIdParam);
+  //     }
 
-      setTimeout(() => {
-        handleAnalyzeAfterPayment(sessionId);
-      }, 100);
-    }
-  }, [searchParams]);
+  //     setTimeout(() => {
+  //       handleAnalyzeAfterPayment(sessionId);
+  //     }, 100);
+  //   }
+  // }, [searchParams]);
 
   useEffect(() => {
     if (viewState === 'loading') {
@@ -201,22 +208,63 @@ export function LandingPage() {
     }
 
     try {
-      const existingBusiness = await getBusinessByUrl(url);
-      if (existingBusiness && !isReanalysis) {
+      // Get or create business
+      let business = await getBusinessByUrl(url);
+      const businessName = customBusinessName || extractedData?.businessName || 'Your Business';
+      let isBaseline = !business;
+
+      // Check if this is a reanalysis
+      if (business && !isReanalysis) {
         console.log('[Payment] Existing business found, checking for baseline');
-        const baselineAnalysis = await getBaselineAnalysis(existingBusiness.id);
+        const baselineAnalysis = await getBaselineAnalysis(business.id);
         if (baselineAnalysis) {
           console.log('[Payment] Baseline exists, this is a re-analysis');
           setIsReanalysis(true);
-          setReanalysisBusinessId(existingBusiness.id);
-          setReanalysisBusinessName(existingBusiness.business_name);
+          setReanalysisBusinessId(business.id);
+          setReanalysisBusinessName(business.business_name);
+          isBaseline = false;
         }
       }
-    } catch (err) {
-      console.error('[Payment] Error checking for existing business:', err);
-    }
 
-    setShowPaymentModal(true);
+      // If reanalysis, get the business
+      if (isReanalysis && reanalysisBusinessId) {
+        business = await getBusinessById(reanalysisBusinessId);
+        if (!business) {
+          throw new Error('Business not found for reanalysis');
+        }
+        isBaseline = false;
+      }
+
+      // Create business if it doesn't exist
+      if (!business) {
+        console.log('[Payment] Creating new business record');
+        business = await createBusiness(businessName, url);
+      }
+
+      // Create analysis record with payment_status='pending' BEFORE opening payment modal
+      console.log('[Payment] Creating analysis record with pending payment');
+      const amount = isBaseline ? FIRST_ANALYSIS_PRICE : REANALYSIS_PRICE;
+      const analysisId = await createAnalysis(
+        business.id,
+        url,
+        businessName,
+        extractedData?.reviewCount || 0,
+        extractedData?.totalScore || 0,
+        isBaseline,
+        null, // paymentId - will be set by webhook
+        undefined, // amountPaid - will be set by webhook
+        'pending' // payment_status - starts as pending
+      );
+
+      console.log('[Payment] Analysis created with ID:', analysisId);
+      setPendingAnalysisId(analysisId);
+
+      // Now open payment modal with analysisId
+      setShowPaymentModal(true);
+    } catch (err) {
+      console.error('[Payment] Error preparing payment:', err);
+      setError(err instanceof Error ? err.message : 'Failed to prepare payment. Please try again.');
+    }
   };
 
   const handleAnalyzeAfterPayment = async (sessionId: string) => {
@@ -359,6 +407,16 @@ export function LandingPage() {
       return;
     }
 
+    // HARD GUARD: Check if we're in a payment flow - if so, disable save/create
+    try {
+      guardAgainstPostPaymentInsert(paymentSessionId, searchParams, 'handleSaveToDashboard');
+    } catch (guardError) {
+      console.error('[Analytics] BLOCKED by guard:', guardError);
+      setCopyToastMessage('Cannot save analysis during payment flow. Please wait for payment confirmation.');
+      setTimeout(() => setCopyToastMessage(''), 5000);
+      return;
+    }
+
     setIsSaving(true);
     console.log('[Analytics] Saving analysis to database');
 
@@ -380,18 +438,92 @@ export function LandingPage() {
         business = await createBusiness(businessName, url);
       }
 
-      console.log('[Analytics] Creating analysis record');
-      const amount = isBaseline ? FIRST_ANALYSIS_PRICE : REANALYSIS_PRICE;
-      const analysisId = await createAnalysis(
-        business.id,
-        url,
-        businessName,
-        extractedData.reviewCount || 0,
-        extractedData.totalScore || 0,
-        isBaseline,
-        paymentSessionId,
-        amount
-      );
+      // CRITICAL: After payment, NEVER create a new analysis. Only use existing one.
+      let analysisId: string;
+      let existingAnalysis = null;
+
+      // First check: pendingAnalysisId from payment flow
+      if (pendingAnalysisId) {
+        console.log('[Analytics] Using existing analysis record from payment flow:', pendingAnalysisId);
+        analysisId = pendingAnalysisId;
+        existingAnalysis = { id: analysisId };
+      } 
+      // Second check: Look for existing analysis by Stripe session ID (prevents duplicates)
+      else if (paymentSessionId) {
+        console.log('[Analytics] Checking for existing analysis by Stripe session ID:', paymentSessionId);
+        existingAnalysis = await getAnalysisByStripeSessionId(paymentSessionId);
+        if (existingAnalysis) {
+          console.log('[Analytics] Found existing analysis:', existingAnalysis.id);
+          analysisId = existingAnalysis.id;
+        } else {
+          // CRITICAL: If paymentSessionId exists but no analysis found, this is an error
+          // DO NOT create a new analysis - the analysis MUST exist from payment flow
+          console.error('[Analytics] CRITICAL: paymentSessionId exists but no analysis found:', paymentSessionId);
+          throw new Error('Analysis not found for this payment. Please contact support.');
+        }
+      }
+
+      // SAFETY ASSERTION: Check for duplicate analyses for same business + payment
+      if (paymentSessionId && existingAnalysis) {
+        const { data: duplicates, error: dupError } = await supabase
+          .from('analyses')
+          .select('id')
+          .eq('business_id', business.id)
+          .eq('stripe_checkout_session_id', paymentSessionId);
+        
+        if (!dupError && duplicates && duplicates.length > 1) {
+          console.error('[Analytics] CRITICAL: Multiple analyses found for same payment:', {
+            paymentSessionId,
+            businessId: business.id,
+            count: duplicates.length,
+            ids: duplicates.map(d => d.id)
+          });
+          // Use the first one (oldest) and log the error
+          analysisId = duplicates[0].id;
+          existingAnalysis = { id: analysisId };
+        }
+      }
+
+      // If we found an existing analysis, update it (don't create new)
+      if (existingAnalysis) {
+        console.log('[Analytics] Updating existing analysis record:', analysisId);
+        
+        // Update the existing analysis with payment info and mark as completed
+        const { error: updateError } = await supabase
+          .from('analyses')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            payment_id: paymentSessionId,
+            amount_paid: isBaseline ? FIRST_ANALYSIS_PRICE : REANALYSIS_PRICE,
+          })
+          .eq('id', analysisId);
+        
+        if (updateError) {
+          console.error('[Analytics] Failed to update analysis:', updateError);
+          throw updateError;
+        }
+      } 
+      // ONLY create new analysis if NO paymentSessionId exists (non-payment flow)
+      else if (!paymentSessionId) {
+        console.log('[Analytics] No payment session, creating new analysis record (non-payment flow)');
+        const amount = isBaseline ? FIRST_ANALYSIS_PRICE : REANALYSIS_PRICE;
+        analysisId = await createAnalysis(
+          business.id,
+          url,
+          businessName,
+          extractedData.reviewCount || 0,
+          extractedData.totalScore || 0,
+          isBaseline,
+          null, // No payment session
+          amount,
+          'paid', // Non-payment flow assumes already paid
+          'handleSaveToDashboard (non-payment)' // caller context
+        );
+      } else {
+        // This should never happen due to the guard above, but add as safety
+        throw new Error('Cannot save analysis: payment session exists but no analysis found.');
+      }
 
       console.log('[Analytics] Saving reviews');
       if (extractedData.reviews && extractedData.reviews.length > 0) {
@@ -442,6 +574,7 @@ export function LandingPage() {
 
       console.log('[Analytics] Analysis saved successfully');
       setIsSaved(true);
+      setPendingAnalysisId(null); // Clear pending analysis ID after saving
 
       setTimeout(() => {
         if (hasDelta) {
@@ -1409,7 +1542,7 @@ export function LandingPage() {
               }`}
             >
               {isValidUrl
-                ? (isReanalysis ? 'Analyze My Reviews - $10' : 'Analyze My Reviews - $49')
+                ? (isReanalysis ? 'Analyze My Reviews - $10' : 'Analyze My Reviews - $0.50')
                 : 'Enter a valid URL to continue'
               }
             </button>
@@ -1608,7 +1741,7 @@ export function LandingPage() {
             <div className="bg-white border-3 border-blue-600 rounded-2xl p-10 text-center shadow-2xl hover:shadow-3xl transition-all">
               <h3 className="text-3xl font-bold text-slate-900 mb-4">Complete Analysis</h3>
               <div className="mb-6">
-                <span className="text-6xl font-extrabold text-slate-900">$49</span>
+                <span className="text-6xl font-extrabold text-slate-900">$0.50</span>
               </div>
               <p className="text-slate-600 mb-8 text-lg leading-relaxed">
                 Get a comprehensive analysis of your reviews with actionable insights. Everything you need to improve your customer experience.
@@ -1690,13 +1823,18 @@ export function LandingPage() {
 
       <PaymentModal
         isOpen={showPaymentModal}
-        onClose={() => setShowPaymentModal(false)}
+        onClose={() => {
+          setShowPaymentModal(false);
+          setPendingAnalysisId(null); // Reset when modal closes
+        }}
         amount={isReanalysis ? REANALYSIS_PRICE : FIRST_ANALYSIS_PRICE}
         businessName={customBusinessName || extractedData?.businessName || 'Your Business'}
         isReanalysis={isReanalysis}
         url={url}
         businessId={reanalysisBusinessId || undefined}
+        analysisId={pendingAnalysisId}
       />
     </div>
   );
 }
+

@@ -10,6 +10,7 @@ interface PaymentModalProps {
   isReanalysis: boolean;
   url: string;
   businessId?: string;
+  analysisId: string | null; // Required - analysis must exist before payment
 }
 
 export function PaymentModal({
@@ -20,6 +21,7 @@ export function PaymentModal({
   isReanalysis,
   url,
   businessId,
+  analysisId,
 }: PaymentModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,10 +37,16 @@ export function PaymentModal({
   });
 
   const handlePayment = async () => {
+    // Block payment if analysisId is null
+    if (!analysisId) {
+      setError('Analysis record not found. Please try again.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
-    console.log('[PaymentModal] Starting payment process');
+    console.log('[PaymentModal] Starting payment process with analysisId:', analysisId);
 
     try {
       const { url: checkoutUrl } = await createCheckoutSession(
@@ -46,7 +54,8 @@ export function PaymentModal({
         businessName,
         isReanalysis,
         url,
-        businessId
+        businessId,
+        analysisId
       );
       console.log('[PaymentModal] Checkout URL received:', checkoutUrl);
       console.log('[PaymentModal] Redirecting to Stripe...');
@@ -125,7 +134,7 @@ export function PaymentModal({
             </button>
             <button
               onClick={handlePayment}
-              disabled={loading}
+              disabled={loading || !analysisId}
               className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading ? (
