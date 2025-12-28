@@ -1,0 +1,8 @@
+[functions.run-analysis]
+verify_jwt = false
+
+[functions.extract-reviews]
+verify_jwt = false
+
+[functions.analyze-reviews]
+verify_jwt = false
