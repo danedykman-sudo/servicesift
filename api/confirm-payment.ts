@@ -368,8 +368,6 @@ export default async function handler(req: any, res: any) {
 
       // Trigger analysis asynchronously (fire-and-forget)
       // Don't await - let it run in the background
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-      
       if (supabaseUrl && supabaseAnonKey) {
         const edgeFunctionUrl = `${supabaseUrl}/functions/v1/run-analysis`;
         const requestBody = {
@@ -379,6 +377,7 @@ export default async function handler(req: any, res: any) {
         };
         const requestHeaders = {
           'Content-Type': 'application/json',
+          'Authorization': authHeader, // Forward user JWT
           'apikey': supabaseAnonKey,
         };
         
