@@ -485,16 +485,19 @@ export default async function handler(req: any, res: any) {
           });
           // Don't throw - analysis can be retried manually via trigger-analysis endpoint
           // Update status to failed so user knows something went wrong
-          supabaseService
-            .from('analyses')
-            .update({ 
-              status: 'failed',
-              error_message: 'Failed to start analysis. Please try "Run Analysis Now" button.'
-            })
-            .eq('id', analysisId)
-            .catch(updateErr => {
+          (async () => {
+            try {
+              await supabaseService
+                .from('analyses')
+                .update({ 
+                  status: 'failed',
+                  error_message: 'Failed to start analysis. Please try "Run Analysis Now" button.'
+                })
+                .eq('id', analysisId);
+            } catch (updateErr) {
               console.error('[confirm-payment] Failed to update status after trigger error:', updateErr);
-            });
+            }
+          })();
         });
       } else {
         console.error('[confirm-payment] Missing Supabase configuration for async trigger');
