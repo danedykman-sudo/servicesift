@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Loader2, CheckCircle, AlertCircle, FileJson, Eye, ArrowLeft, Copy } from 'lucide-react';
+import { Loader2, CheckCircle, AlertCircle, FileJson, Eye, ArrowLeft, Copy, FileDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ReportStatusResponse {
@@ -29,6 +29,7 @@ export function ReportStatus() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [loadingJson, setLoadingJson] = useState(false);
+  const [loadingPdf, setLoadingPdf] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -286,16 +287,70 @@ export function ReportStatus() {
                 {copied ? 'Copied!' : 'Copy link'}
               </button>
 
-              {/* View Report and JSON buttons - Only when READY */}
+              {/* View Report, Download PDF, and JSON buttons - Only when READY */}
               {isReady && reportStatus?.analysis_id && (
-                <div className="flex flex-col sm:flex-row gap-4">
-                  <Link
-                    to={`/report/${reportStatus.analysis_id}`}
-                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
-                  >
-                    <Eye className="w-5 h-5" />
-                    View Report
-                  </Link>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <Link
+                      to={`/report/${reportStatus.analysis_id}`}
+                      className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
+                    >
+                      <Eye className="w-5 h-5" />
+                      View Report
+                    </Link>
+                    <button
+                      onClick={async () => {
+                        if (!reportId || loadingPdf) return;
+                        
+                        setLoadingPdf(true);
+                        try {
+                          const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+                          
+                          if (!response.ok) {
+                            if (response.status === 404) {
+                              setError('PDF artifact not found. The PDF may still be generating. Please try again in a moment.');
+                            } else {
+                              const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
+                              setError(errorData.error || 'Failed to load PDF artifact');
+                            }
+                            return;
+                          }
+
+                          const data = await response.json();
+                          if (data.url) {
+                            // Download PDF
+                            const link = document.createElement('a');
+                            link.href = data.url;
+                            link.download = `report-${reportId}.pdf`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          } else {
+                            setError('Invalid response from server');
+                          }
+                        } catch (err) {
+                          console.error('[ReportStatus] Error loading PDF:', err);
+                          setError('Failed to load PDF. Please try again.');
+                        } finally {
+                          setLoadingPdf(false);
+                        }
+                      }}
+                      disabled={loadingPdf}
+                      className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {loadingPdf ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <FileDown className="w-5 h-5" />
+                          Download PDF
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <button
                     onClick={async () => {
                       if (!reportId || loadingJson) return;
@@ -329,7 +384,7 @@ export function ReportStatus() {
                       }
                     }}
                     disabled={loadingJson}
-                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold rounded-lg transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center justify-center gap-2 px-6 py-3 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold rounded-lg transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {loadingJson ? (
                       <>

@@ -9,6 +9,7 @@ import { ResetPassword } from './pages/ResetPassword';
 import { Dashboard } from './pages/Dashboard';
 import { ViewReport } from './pages/ViewReport';
 import { DeltaReport } from './pages/DeltaReport';
+import { ReportStatus } from './pages/ReportStatus';
 import Maintenance from './pages/Maintenance';
 
 const MAINTENANCE_MODE = false;
@@ -16,7 +17,7 @@ const MAINTENANCE_MODE = false;
 function AppContent() {
   const location = useLocation();
   const authPages = ['/login', '/signup', '/forgot-password', '/reset-password'];
-  const pagesWithOwnHeader = ['/report/', '/delta/'];
+  const pagesWithOwnHeader = ['/report/', '/delta/', '/report-status/'];
   const showHeader = !authPages.includes(location.pathname) &&
     !pagesWithOwnHeader.some(page => location.pathname.startsWith(page));
 
@@ -42,6 +43,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <ViewReport />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/report-status/:reportId"
+          element={
+            <ProtectedRoute>
+              <ReportStatus />
             </ProtectedRoute>
           }
         />

@@ -101,20 +101,26 @@ Deno.serve(async (req: Request) => {
 
     const apifyInput = {
       startUrls: [{ url }],
-      maxReviews: 200,
+      maxReviews: maxReviews || 200,
       reviewsSort: "newest",
       reviewsOrigin: "google",
       language: "en",
       personalData: false,
     };
 
-    console.log("Trying primary actor (compass~google-maps-reviews-scraper)");
-    console.log("Sending to Apify:", JSON.stringify(apifyInput, null, 2));
+    console.log("[extract-reviews] Trying primary actor (compass~google-maps-reviews-scraper)", {
+      traceId,
+      url: url.substring(0, 50),
+      maxReviews: maxReviews || 200,
+      timestamp: new Date().toISOString()
+    });
+    console.log("[extract-reviews] Sending to Apify:", JSON.stringify(apifyInput, null, 2));
 
     let apifyData: any[] = [];
     let extractionMethod = "primary";
 
     try {
+      console.log("[extract-reviews] Calling primary Apify actor...", { traceId, timestamp: new Date().toISOString() });
       const primaryResponse = await fetch(primaryActorUrl, {
         method: "POST",
         headers: {
@@ -123,37 +129,84 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify(apifyInput),
       });
 
+      console.log("[extract-reviews] Primary actor response status:", {
+        traceId,
+        status: primaryResponse.status,
+        ok: primaryResponse.ok,
+        timestamp: new Date().toISOString()
+      });
+
       if (primaryResponse.ok) {
         const responseData = await primaryResponse.json();
+        console.log("[extract-reviews] Primary actor response data:", {
+          traceId,
+          isArray: Array.isArray(responseData),
+          dataLength: Array.isArray(responseData) ? responseData.length : 0,
+          firstItemKeys: Array.isArray(responseData) && responseData.length > 0 ? Object.keys(responseData[0]) : [],
+          timestamp: new Date().toISOString()
+        });
 
         if (Array.isArray(responseData) && responseData.length > 0) {
           const firstItem = responseData[0];
+          console.log("[extract-reviews] First item from primary actor:", {
+            traceId,
+            keys: Object.keys(firstItem),
+            hasError: !!firstItem.error,
+            error: firstItem.error,
+            timestamp: new Date().toISOString()
+          });
+          
           if (firstItem.error === "no_search_results" || firstItem.error) {
-            console.log("Primary actor returned error:", firstItem.error);
+            console.log("[extract-reviews] Primary actor returned error:", {
+              traceId,
+              error: firstItem.error,
+              timestamp: new Date().toISOString()
+            });
           } else {
             apifyData = responseData;
-            console.log("Primary actor extracted:", apifyData.length, "items");
+            console.log("[extract-reviews] Primary actor extracted successfully:", {
+              traceId,
+              itemCount: apifyData.length,
+              timestamp: new Date().toISOString()
+            });
           }
+        } else {
+          console.warn("[extract-reviews] Primary actor returned empty or invalid data:", {
+            traceId,
+            responseData,
+            timestamp: new Date().toISOString()
+          });
         }
       } else {
         const errorText = await primaryResponse.text();
-        console.error("Primary actor HTTP error:", primaryResponse.status, errorText);
+        console.error("[extract-reviews] Primary actor HTTP error:", {
+          traceId,
+          status: primaryResponse.status,
+          errorText: errorText.substring(0, 500),
+          timestamp: new Date().toISOString()
+        });
       }
       } catch (error) {
-        console.error("Primary actor failed:", {
+        console.error("[extract-reviews] Primary actor failed:", {
           traceId,
           error: error instanceof Error ? error.message : "Unknown error",
-          stack: error instanceof Error ? error.stack : undefined
+          stack: error instanceof Error ? error.stack : undefined,
+          timestamp: new Date().toISOString()
         });
     }
 
     // If primary actor returned no data, try fallback actor
     if (apifyData.length === 0) {
-      console.log("Primary actor returned no data, trying fallback actor (delicious_zebu~google-maps-store-review-scraper)");
+      console.log("[extract-reviews] Primary actor returned no data, trying fallback actor", {
+        traceId,
+        actor: "delicious_zebu~google-maps-store-review-scraper",
+        timestamp: new Date().toISOString()
+      });
 
       const fallbackActorUrl = `https://api.apify.com/v2/acts/delicious_zebu~google-maps-store-review-scraper/run-sync-get-dataset-items?token=${apifyToken}`;
 
       try {
+        console.log("[extract-reviews] Calling fallback Apify actor...", { traceId, timestamp: new Date().toISOString() });
         const fallbackResponse = await fetch(fallbackActorUrl, {
           method: "POST",
           headers: {
@@ -162,39 +215,94 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify(apifyInput),
         });
 
+        console.log("[extract-reviews] Fallback actor response status:", {
+          traceId,
+          status: fallbackResponse.status,
+          ok: fallbackResponse.ok,
+          timestamp: new Date().toISOString()
+        });
+
         if (fallbackResponse.ok) {
           const responseData = await fallbackResponse.json();
+          console.log("[extract-reviews] Fallback actor response data:", {
+            traceId,
+            isArray: Array.isArray(responseData),
+            dataLength: Array.isArray(responseData) ? responseData.length : 0,
+            firstItemKeys: Array.isArray(responseData) && responseData.length > 0 ? Object.keys(responseData[0]) : [],
+            timestamp: new Date().toISOString()
+          });
 
           if (Array.isArray(responseData) && responseData.length > 0) {
             const firstItem = responseData[0];
+            console.log("[extract-reviews] First item from fallback actor:", {
+              traceId,
+              keys: Object.keys(firstItem),
+              hasError: !!firstItem.error,
+              error: firstItem.error,
+              timestamp: new Date().toISOString()
+            });
+            
             if (firstItem.error === "no_search_results" || firstItem.error) {
-              console.log("Fallback actor returned error:", firstItem.error);
+              console.log("[extract-reviews] Fallback actor returned error:", {
+                traceId,
+                error: firstItem.error,
+                timestamp: new Date().toISOString()
+              });
             } else {
               apifyData = responseData;
               extractionMethod = "fallback";
-              console.log("Fallback actor extracted:", apifyData.length, "items");
+              console.log("[extract-reviews] Fallback actor extracted successfully:", {
+                traceId,
+                itemCount: apifyData.length,
+                timestamp: new Date().toISOString()
+              });
             }
+          } else {
+            console.warn("[extract-reviews] Fallback actor returned empty or invalid data:", {
+              traceId,
+              responseData,
+              timestamp: new Date().toISOString()
+            });
           }
         } else {
           const errorText = await fallbackResponse.text();
-          console.error("Fallback actor HTTP error:", fallbackResponse.status, errorText);
+          console.error("[extract-reviews] Fallback actor HTTP error:", {
+            traceId,
+            status: fallbackResponse.status,
+            errorText: errorText.substring(0, 500),
+            timestamp: new Date().toISOString()
+          });
         }
       } catch (error) {
-        console.error("Fallback actor failed:", {
+        console.error("[extract-reviews] Fallback actor failed:", {
           traceId,
           error: error instanceof Error ? error.message : "Unknown error",
-          stack: error instanceof Error ? error.stack : undefined
+          stack: error instanceof Error ? error.stack : undefined,
+          timestamp: new Date().toISOString()
         });
       }
     }
 
-    console.log("Apify returned data items:", apifyData.length);
+    console.log("[extract-reviews] Apify returned data items:", {
+      traceId,
+      itemCount: apifyData.length,
+      timestamp: new Date().toISOString()
+    });
     if (apifyData.length > 0) {
-      console.log("First item keys:", Object.keys(apifyData[0]));
+      console.log("[extract-reviews] First item keys:", {
+        traceId,
+        keys: Object.keys(apifyData[0]),
+        firstItemSample: JSON.stringify(apifyData[0]).substring(0, 500),
+        timestamp: new Date().toISOString()
+      });
     }
 
     if (!apifyData || apifyData.length === 0) {
-      console.log("Both actors failed to extract reviews");
+      console.error("[extract-reviews] Both actors failed to extract reviews", {
+        traceId,
+        url: url.substring(0, 50),
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({
           success: false,
@@ -211,22 +319,45 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    console.log("Extraction method:", extractionMethod);
+    console.log("[extract-reviews] Extraction method:", {
+      traceId,
+      method: extractionMethod,
+      timestamp: new Date().toISOString()
+    });
 
     // Check if this actor returns reviews directly (each item is a review)
     // or wrapped in a business object with a reviews array
     const firstItem = apifyData[0];
+    console.log("[extract-reviews] Parsing data structure:", {
+      traceId,
+      firstItemKeys: Object.keys(firstItem),
+      hasReviews: "reviews" in firstItem,
+      hasText: "text" in firstItem,
+      hasReviewText: "reviewText" in firstItem,
+      timestamp: new Date().toISOString()
+    });
+    
     let reviews: any[] = [];
     let businessName = firstItem.placeTitle || firstItem.title || firstItem.name || "Review Analysis Report";
     let totalScore = 0;
 
     if ("reviews" in firstItem && Array.isArray(firstItem.reviews)) {
       // Old format: business object with reviews array
+      console.log("[extract-reviews] Using old format (business object with reviews array)", {
+        traceId,
+        reviewCount: firstItem.reviews.length,
+        timestamp: new Date().toISOString()
+      });
       reviews = firstItem.reviews;
       businessName = firstItem.placeTitle || firstItem.title || firstItem.name || "Review Analysis Report";
       totalScore = firstItem.totalScore || 0;
     } else if ("text" in firstItem || "reviewText" in firstItem) {
       // New format: each item is a review
+      console.log("[extract-reviews] Using new format (each item is a review)", {
+        traceId,
+        itemCount: apifyData.length,
+        timestamp: new Date().toISOString()
+      });
       reviews = apifyData;
       businessName = firstItem.placeTitle || firstItem.title || firstItem.name || "Review Analysis Report";
 
@@ -237,9 +368,19 @@ Deno.serve(async (req: Request) => {
       totalScore = validRatings.length > 0
         ? validRatings.reduce((a, b) => a + b, 0) / validRatings.length
         : 0;
+      console.log("[extract-reviews] Calculated average rating:", {
+        traceId,
+        totalScore,
+        validRatingsCount: validRatings.length,
+        timestamp: new Date().toISOString()
+      });
     } else {
-      console.log("Unexpected data structure:", JSON.stringify(firstItem, null, 2));
-      console.log("Data keys:", Object.keys(firstItem));
+      console.error("[extract-reviews] Unexpected data structure:", {
+        traceId,
+        firstItem: JSON.stringify(firstItem, null, 2).substring(0, 1000),
+        dataKeys: Object.keys(firstItem),
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({
           success: false,
@@ -256,10 +397,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    console.log("Number of reviews extracted:", reviews.length);
+    console.log("[extract-reviews] Number of reviews extracted:", {
+      traceId,
+      reviewCount: reviews.length,
+      businessName,
+      totalScore,
+      timestamp: new Date().toISOString()
+    });
 
     if (reviews.length === 0) {
-      console.log("No reviews found after parsing data structure");
+      console.error("[extract-reviews] No reviews found after parsing data structure", {
+        traceId,
+        apifyDataLength: apifyData.length,
+        firstItemKeys: Object.keys(firstItem),
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({
           success: false,
@@ -283,6 +435,15 @@ Deno.serve(async (req: Request) => {
       date: review.publishedAtDate || review.publishAt || review.date || new Date().toISOString(),
       author: review.name || review.reviewerName || "Anonymous",
     }));
+
+    console.log("[extract-reviews] Returning successful response", {
+      traceId,
+      reviewCount: normalizedReviews.length,
+      businessName,
+      totalScore,
+      extractionMethod,
+      timestamp: new Date().toISOString()
+    });
 
     return new Response(
       JSON.stringify({

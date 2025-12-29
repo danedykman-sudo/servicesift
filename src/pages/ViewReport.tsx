@@ -30,6 +30,8 @@ export function ViewReport() {
   const [expandedCauseIndex, setExpandedCauseIndex] = useState(0);
   const [analysisHistory, setAnalysisHistory] = useState<Analysis[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [loadingPdf, setLoadingPdf] = useState(false);
+  const [reportId, setReportId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
@@ -52,6 +54,20 @@ export function ViewReport() {
       const data = await getFullAnalysisReport(analysisId!);
       setReport(data);
       loadHistory(data.analysis.business_id);
+      
+      // Fetch reportId from analysisId
+      try {
+        const response = await fetch(`/api/report-by-analysis?analysisId=${analysisId}`);
+        if (response.ok) {
+          const result = await response.json();
+          if (result.reportId) {
+            setReportId(result.reportId);
+          }
+        }
+      } catch (err) {
+        console.warn('[ViewReport] Failed to fetch reportId:', err);
+        // Non-critical - PDF download will show error if needed
+      }
     } catch (err: any) {
       console.error('Failed to load report:', err);
       setError(err.message || 'Failed to load report');
@@ -179,11 +195,56 @@ export function ViewReport() {
             Back to Dashboard
           </Link>
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-2 px-4 py-2 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-semibold rounded-lg transition-colors shadow-lg"
+            onClick={async () => {
+              if (!reportId || loadingPdf) return;
+              
+              setLoadingPdf(true);
+              try {
+                const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+                
+                if (!response.ok) {
+                  if (response.status === 404) {
+                    setError('PDF artifact not found. The PDF may still be generating. Please try again in a moment.');
+                  } else {
+                    const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
+                    setError(errorData.error || 'Failed to load PDF artifact');
+                  }
+                  return;
+                }
+
+                const data = await response.json();
+                if (data.url) {
+                  // Download PDF
+                  const link = document.createElement('a');
+                  link.href = data.url;
+                  link.download = `report-${reportId}.pdf`;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                } else {
+                  setError('Invalid response from server');
+                }
+              } catch (err) {
+                console.error('[ViewReport] Error loading PDF:', err);
+                setError('Failed to load PDF. Please try again.');
+              } finally {
+                setLoadingPdf(false);
+              }
+            }}
+            disabled={!reportId || loadingPdf}
+            className="flex items-center gap-2 px-4 py-2 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-semibold rounded-lg transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Download className="w-5 h-5" />
-            Download PDF
+            {loadingPdf ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              <>
+                <Download className="w-5 h-5" />
+                Download PDF
+              </>
+            )}
           </button>
         </div>
 

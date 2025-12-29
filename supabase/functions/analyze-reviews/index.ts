@@ -104,7 +104,18 @@ Deno.serve(async (req: Request) => {
     }
 
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    console.log("[analyze-reviews] Environment check:", {
+      traceId,
+      hasApiKey: !!apiKey,
+      apiKeyPrefix: apiKey ? apiKey.substring(0, 10) + "..." : "missing",
+      timestamp: new Date().toISOString()
+    });
+    
     if (!apiKey) {
+      console.error("[analyze-reviews] ANTHROPIC_API_KEY not configured", {
+        traceId,
+        timestamp: new Date().toISOString()
+      });
       return new Response(
         JSON.stringify({ success: false, error: "API key not configured" }),
         {

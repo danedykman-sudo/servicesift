@@ -317,6 +317,62 @@ export default async function handler(req: any, res: any) {
       analysis.stripe_checkout_session_id = session.id;
     }
 
+    // Phase 1 Step 1: Create report record with status PAID/QUEUED
+    let reportId: string | null = null;
+    try {
+      const { data: existingReport } = await supabaseService
+        .from('reports')
+        .select('id')
+        .eq('analysis_id', analysisId)
+        .maybeSingle();
+
+      if (!existingReport) {
+        const reportData: any = {
+          analysis_id: analysisId,
+          business_id: analysis.business_id,
+          stripe_checkout_session_id: session.id,
+          status: analysis.status === 'completed' ? 'QUEUED' : 'PAID',
+          coverage_level: 200,
+          run_type: 'SNAPSHOT',
+          latest_artifact_version: 1
+        };
+
+        const { data: newReport, error: reportError } = await supabaseService
+          .from('reports')
+          .insert(reportData)
+          .select('id')
+          .single();
+
+        if (reportError) {
+          console.error('[confirm-payment] Failed to create report (non-critical):', reportError);
+        } else {
+          reportId = newReport.id;
+          console.log('[confirm-payment] Created report record with status:', reportData.status, 'reportId:', reportId);
+        }
+      } else {
+        reportId = existingReport.id;
+        // Update existing report to PAID if it was CREATED
+        const { error: updateError } = await supabaseService
+          .from('reports')
+          .update({
+            status: 'PAID',
+            stripe_checkout_session_id: session.id,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingReport.id)
+          .eq('status', 'CREATED');
+
+        if (updateError) {
+          console.error('[confirm-payment] Failed to update report status (non-critical):', updateError);
+        } else {
+          console.log('[confirm-payment] Updated existing report to PAID, reportId:', reportId);
+        }
+      }
+    } catch (reportErr) {
+      console.error('[confirm-payment] Error creating report (non-critical):', reportErr);
+      // Non-critical - payment confirmed, report can be created later
+    }
+
     // Trigger analysis asynchronously if not already completed
     if (analysis.status !== 'completed') {
       console.log('[confirm-payment] Triggering analysis asynchronously:', {
@@ -517,6 +573,7 @@ export default async function handler(req: any, res: any) {
         success: true, 
         message: 'Analysis started',
         analysisId,
+        reportId, // Include reportId for redirect to status page
         status: 'extracting'
       });
     }
@@ -527,6 +584,7 @@ export default async function handler(req: any, res: any) {
       success: true, 
       message: 'Analysis already completed',
       analysisId,
+      reportId, // Include reportId for redirect to status page
       status: 'completed'
     });
   } catch (error) {
