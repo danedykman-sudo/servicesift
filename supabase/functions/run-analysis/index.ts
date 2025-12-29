@@ -928,22 +928,25 @@ Deno.serve(async (req: Request) => {
                 }
                 
                 try {
-                  // Use service role key for PDF generation (not user JWT)
-                  // generate-pdf-report has verify_jwt=false and uses service role internally
+                  // Use internal secret for PDF generation (edge-to-edge auth)
                   const generatePdfUrl = `${supabaseUrl}/functions/v1/generate-pdf-report`;
+                  const pdfInternalSecret = Deno.env.get("PDF_INTERNAL_SECRET");
+                  
                   const generatePdfHeaders: Record<string, string> = {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${supabaseServiceRoleKey}`,
-                    "apikey": supabaseServiceRoleKey || "",
                   };
+                  
+                  // Add internal secret for authentication
+                  if (pdfInternalSecret) {
+                    generatePdfHeaders["x-internal-secret"] = pdfInternalSecret;
+                  }
 
                   // Log before call
                   console.log("[run-analysis] PDF generation call details:", {
                     reportId,
                     url: generatePdfUrl,
-                    hasAuthorization: !!generatePdfHeaders["Authorization"],
-                    hasApikey: !!generatePdfHeaders["apikey"],
-                    authType: "service-role-key",
+                    hasInternalSecret: !!pdfInternalSecret,
+                    authType: "internal-secret",
                   });
 
                   const result = await callGeneratePdfWithRetry(

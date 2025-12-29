@@ -24,6 +24,22 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  // Validate internal secret (edge-to-edge auth)
+  const expectedSecret = Deno.env.get("PDF_INTERNAL_SECRET");
+  if (expectedSecret) {
+    const providedSecret = req.headers.get("x-internal-secret");
+    if (providedSecret !== expectedSecret) {
+      console.error("[generate-pdf-report] Invalid or missing internal secret");
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    console.log("[generate-pdf-report] Internal secret validated successfully");
+  } else {
+    console.log("[generate-pdf-report] No internal secret configured, allowing request");
+  }
+
   try {
     const { reportId }: GeneratePdfRequest = await req.json();
 
