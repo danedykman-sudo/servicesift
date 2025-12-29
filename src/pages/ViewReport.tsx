@@ -187,6 +187,16 @@ export function ViewReport() {
           </button>
         </div>
 
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 bg-red-50 border-2 border-red-200 rounded-lg p-4">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <p className="text-sm font-semibold text-red-800">{error}</p>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white rounded-2xl shadow-xl border-2 border-blue-100 p-8 mb-6">
           <div className="flex items-start justify-between mb-4">
             <div>

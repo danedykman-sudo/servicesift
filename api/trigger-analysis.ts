@@ -141,11 +141,50 @@ export default async function handler(req: any, res: any) {
 
     if (existingRootCauses && existingRootCauses.length > 0) {
       console.log('[trigger-analysis] Analysis already has results, skipping');
+      
+      // Get or create report for this analysis
+      let reportId: string | null = null;
+      try {
+        const { data: existingReport } = await supabaseService
+          .from('reports')
+          .select('id')
+          .eq('analysis_id', analysisId)
+          .maybeSingle();
+        
+        if (existingReport) {
+          reportId = existingReport.id;
+        } else {
+          // Create report if it doesn't exist
+          const { data: newReport, error: reportError } = await supabaseService
+            .from('reports')
+            .insert({
+              analysis_id: analysisId,
+              business_id: analysis.business_id,
+              stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+              status: 'READY',
+              coverage_level: 200,
+              run_type: 'SNAPSHOT',
+              latest_artifact_version: 1
+            })
+            .select('id')
+            .single();
+          
+          if (!reportError && newReport) {
+            reportId = newReport.id;
+          }
+        }
+      } catch (reportErr) {
+        console.error('[trigger-analysis] Error getting/creating report:', reportErr);
+        // Non-critical - continue without reportId
+      }
+      
       res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
       return res.status(200).json({ 
         success: true, 
         message: 'Analysis already completed',
-        analysisId
+        analysisId,
+        reportId: reportId || undefined,
+        status: 'completed'
       });
     }
 
@@ -167,11 +206,48 @@ export default async function handler(req: any, res: any) {
           stuckDuration: `${Math.round(stuckDuration / 1000)}s`,
           threshold: `${stuckThreshold / 1000}s`
         });
+        // Get or create report for this analysis
+        let reportId: string | null = null;
+        try {
+          const { data: existingReport } = await supabaseService
+            .from('reports')
+            .select('id')
+            .eq('analysis_id', analysisId)
+            .maybeSingle();
+          
+          if (existingReport) {
+            reportId = existingReport.id;
+          } else {
+            // Create report if it doesn't exist
+            const { data: newReport, error: reportError } = await supabaseService
+              .from('reports')
+              .insert({
+                analysis_id: analysisId,
+                business_id: analysis.business_id,
+                stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+                status: 'QUEUED',
+                coverage_level: 200,
+                run_type: 'SNAPSHOT',
+                latest_artifact_version: 1
+              })
+              .select('id')
+              .single();
+            
+            if (!reportError && newReport) {
+              reportId = newReport.id;
+            }
+          }
+        } catch (reportErr) {
+          console.error('[trigger-analysis] Error getting/creating report:', reportErr);
+          // Non-critical - continue without reportId
+        }
+        
         res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
         return res.status(200).json({ 
           success: true, 
           message: 'Analysis already in progress',
           analysisId,
+          reportId: reportId || undefined,
           status: analysis.status
         });
       } else {
@@ -194,11 +270,49 @@ export default async function handler(req: any, res: any) {
         analysisId,
         currentStatus: analysis.status
       });
+      
+      // Get or create report for this analysis
+      let reportId: string | null = null;
+      try {
+        const { data: existingReport } = await supabaseService
+          .from('reports')
+          .select('id')
+          .eq('analysis_id', analysisId)
+          .maybeSingle();
+        
+        if (existingReport) {
+          reportId = existingReport.id;
+        } else {
+          // Create report if it doesn't exist
+          const { data: newReport, error: reportError } = await supabaseService
+            .from('reports')
+            .insert({
+              analysis_id: analysisId,
+              business_id: analysis.business_id,
+              stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+              status: 'QUEUED',
+              coverage_level: 200,
+              run_type: 'SNAPSHOT',
+              latest_artifact_version: 1
+            })
+            .select('id')
+            .single();
+          
+          if (!reportError && newReport) {
+            reportId = newReport.id;
+          }
+        }
+      } catch (reportErr) {
+        console.error('[trigger-analysis] Error getting/creating report:', reportErr);
+        // Non-critical - continue without reportId
+      }
+      
       res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
       return res.status(200).json({ 
         success: true, 
         message: 'Analysis already in progress',
         analysisId,
+        reportId: reportId || undefined,
         status: analysis.status
       });
     }
@@ -210,10 +324,52 @@ export default async function handler(req: any, res: any) {
       timestamp: new Date().toISOString()
     });
 
+    // Get or create report for this analysis
+    let reportId: string | null = null;
+    try {
+      const { data: existingReport } = await supabaseService
+        .from('reports')
+        .select('id')
+        .eq('analysis_id', analysisId)
+        .maybeSingle();
+      
+      if (existingReport) {
+        reportId = existingReport.id;
+        // Update report status to QUEUED if it exists
+        await supabaseService
+          .from('reports')
+          .update({ status: 'QUEUED', updated_at: new Date().toISOString() })
+          .eq('id', reportId);
+      } else {
+        // Create report if it doesn't exist
+        const { data: newReport, error: reportError } = await supabaseService
+          .from('reports')
+          .insert({
+            analysis_id: analysisId,
+            business_id: analysis.business_id,
+            stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+            status: 'QUEUED',
+            coverage_level: 200,
+            run_type: 'SNAPSHOT',
+            latest_artifact_version: 1
+          })
+          .select('id')
+          .single();
+        
+        if (!reportError && newReport) {
+          reportId = newReport.id;
+        }
+      }
+    } catch (reportErr) {
+      console.error('[trigger-analysis] Error getting/creating report:', reportErr);
+      // Non-critical - continue without reportId
+    }
+
     // Update status to extracting
     console.log('[trigger-analysis] DEBUG: About to update status to extracting', {
       analysisId,
       currentStatus: analysis.status,
+      reportId,
       timestamp: new Date().toISOString()
     });
 
@@ -307,11 +463,46 @@ export default async function handler(req: any, res: any) {
             timestamp: new Date().toISOString()
           });
           
+          // Get or create report for this analysis
+          let reportId: string | null = null;
+          try {
+            const { data: existingReport } = await supabaseService
+              .from('reports')
+              .select('id')
+              .eq('analysis_id', analysisId)
+              .maybeSingle();
+            
+            if (existingReport) {
+              reportId = existingReport.id;
+            } else {
+              const { data: newReport, error: reportError } = await supabaseService
+                .from('reports')
+                .insert({
+                  analysis_id: analysisId,
+                  business_id: analysis.business_id,
+                  stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+                  status: 'QUEUED',
+                  coverage_level: 200,
+                  run_type: 'SNAPSHOT',
+                  latest_artifact_version: 1
+                })
+                .select('id')
+                .single();
+              
+              if (!reportError && newReport) {
+                reportId = newReport.id;
+              }
+            }
+          } catch (reportErr) {
+            console.error('[trigger-analysis] Error getting/creating report:', reportErr);
+          }
+          
           res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
           return res.status(200).json({ 
             success: true, 
             message: 'Analysis started (sync debug mode)',
             analysisId,
+            reportId: reportId || undefined,
             status: 'extracting',
             runAnalysisResponse: {
               status: response.status,
@@ -448,12 +639,17 @@ export default async function handler(req: any, res: any) {
         });
         
         // Return immediately - analysis runs in background
-        console.log('[trigger-analysis] Analysis triggered asynchronously, returning success');
+        console.log('[trigger-analysis] Analysis triggered asynchronously, returning success', {
+          analysisId,
+          reportId,
+          status: 'extracting'
+        });
         res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
         return res.status(200).json({ 
           success: true, 
           message: 'Analysis started',
           analysisId,
+          reportId: reportId || undefined,
           status: 'extracting'
         });
       }
@@ -479,7 +675,10 @@ export default async function handler(req: any, res: any) {
     console.error('[trigger-analysis] Error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
-    return res.status(500).json({ error: errorMessage });
+    return res.status(500).json({ 
+      success: false,
+      error: errorMessage 
+    });
   }
 }
 

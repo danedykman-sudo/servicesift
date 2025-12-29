@@ -495,15 +495,30 @@ export async function getBusinessById(businessId: string): Promise<Business | nu
 }
 
 export async function getBaselineAnalysis(businessId: string): Promise<Analysis | null> {
+  // Only return baseline analyses that are paid (ignore drafts/canceled/abandoned)
   const { data, error } = await supabase
     .from('analyses')
     .select('*')
     .eq('business_id', businessId)
     .eq('is_baseline', true)
+    .eq('payment_status', 'paid') // Only count paid analyses as baseline
     .maybeSingle();
 
   if (error) throw error;
   return data;
+}
+
+export async function deleteAnalysis(analysisId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { error } = await supabase
+    .from('analyses')
+    .delete()
+    .eq('id', analysisId)
+    .eq('user_id', user.id); // Ensure user owns the analysis
+
+  if (error) throw error;
 }
 
 /**
@@ -666,4 +681,28 @@ export async function cleanupDuplicateBusinesses(): Promise<{
   }
 
   return { cleaned: cleanedCount, kept: keptCount };
+}
+
+export async function fixCorruptedBusinessNames(): Promise<number> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  // Find businesses with corrupted names (containing URL fragments)
+  const { data: businesses } = await supabase
+    .from('businesses')
+    .select('id, business_name, google_maps_url')
+    .eq('user_id', user.id)
+    .or('business_name.ilike.%data=%,business_name.ilike.%!3m%,business_name.ilike.%!4b%');
+
+  if (!businesses || businesses.length === 0) return 0;
+
+  // Update to clean fallback names
+  for (const business of businesses) {
+    await supabase
+      .from('businesses')
+      .update({ business_name: 'Business (Update Name)' })
+      .eq('id', business.id);
+  }
+
+  return businesses.length;
 }

@@ -10,6 +10,7 @@ import {
   deleteBusiness,
   BusinessWithLatestAnalysis,
   cleanupDuplicateBusinesses,
+  fixCorruptedBusinessNames,
 } from '../lib/database';
 
 export function Dashboard() {
@@ -44,7 +45,40 @@ export function Dashboard() {
 
   useEffect(() => {
     loadBusinesses();
-  }, []);
+    
+    // Check localStorage for lastActiveReportId and redirect if still in progress
+    const checkLastActiveReport = async () => {
+      const lastReportId = localStorage.getItem('lastActiveReportId');
+      if (!lastReportId || !user) return;
+      
+      try {
+        const { data: report, error } = await supabase
+          .from('reports')
+          .select('id, status, analysis_id')
+          .eq('id', lastReportId)
+          .single();
+        
+        if (!error && report) {
+          const inProgressStatuses = ['PAID', 'QUEUED', 'SCRAPING', 'ANALYZING', 'STORING'];
+          if (inProgressStatuses.includes(report.status)) {
+            console.log('[Dashboard] Found in-progress report from localStorage, redirecting:', lastReportId);
+            navigate(`/report-status/${lastReportId}`);
+            return;
+          } else if (report.status === 'READY' || report.status === 'FAILED') {
+            // Clear localStorage if report is done
+            localStorage.removeItem('lastActiveReportId');
+          }
+        } else {
+          // Report not found, clear localStorage
+          localStorage.removeItem('lastActiveReportId');
+        }
+      } catch (err) {
+        console.error('[Dashboard] Error checking lastActiveReport:', err);
+      }
+    };
+    
+    checkLastActiveReport();
+  }, [user, navigate]);
 
   // Fallback: Check for recent paid analyses that haven't completed (in case session_id is missing)
   useEffect(() => {
@@ -148,11 +182,53 @@ export function Dashboard() {
       setError('');
       const data = await getUserBusinesses();
       setBusinesses(data);
+      
+      // Check for in-progress reports
+      await checkForInProgressReports(data);
     } catch (err: any) {
       console.error('Failed to load businesses:', err);
       setError(err.message || 'Failed to load businesses');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkForInProgressReports = async (businessesData: BusinessWithLatestAnalysis[]) => {
+    if (!user) return;
+    
+    try {
+      // Get all analysis IDs from businesses
+      const analysisIds: string[] = [];
+      businessesData.forEach(business => {
+        const allAnalyses = (business as any).analyses || [];
+        allAnalyses.forEach((analysis: any) => {
+          if (analysis.id) {
+            analysisIds.push(analysis.id);
+          }
+        });
+      });
+      
+      if (analysisIds.length === 0) return;
+      
+      // Check for reports with in-progress status
+      const { data: reports, error } = await supabase
+        .from('reports')
+        .select('id, status, analysis_id')
+        .in('analysis_id', analysisIds)
+        .in('status', ['PAID', 'QUEUED', 'SCRAPING', 'ANALYZING', 'STORING']);
+      
+      if (error) {
+        console.error('[Dashboard] Error checking for in-progress reports:', error);
+        return;
+      }
+      
+      if (reports && reports.length > 0) {
+        // Found in-progress report - could show notification or auto-redirect
+        // For now, we'll let the user see it in the business card
+        console.log('[Dashboard] Found in-progress reports:', reports);
+      }
+    } catch (err) {
+      console.error('[Dashboard] Error in checkForInProgressReports:', err);
     }
   };
 
@@ -303,6 +379,7 @@ export function Dashboard() {
       console.log('[Dashboard] Step 4: API call successful', {
         success: result.success,
         analysisId: result.analysisId,
+        reportId: result.reportId,
         status: result.status,
         message: result.message
       });
@@ -323,8 +400,15 @@ export function Dashboard() {
       searchParams.delete('session_id');
       setSearchParams(searchParams, { replace: true });
 
-      // Poll for analysis completion
-      console.log('[Dashboard] Step 6: Starting to poll for analysis completion');
+      // Phase 1 Step 1: Redirect to report status page if reportId is available
+      if (result.reportId) {
+        console.log('[Dashboard] Redirecting to report status page:', result.reportId);
+        navigate(`/report-status/${result.reportId}`);
+        return;
+      }
+
+      // Fallback: Poll for analysis completion (existing flow)
+      console.log('[Dashboard] Step 6: No reportId, falling back to polling for analysis completion');
       await pollForAnalysisCompletion(result.analysisId);
       
       console.log('[Dashboard] ===== PAYMENT CONFIRMATION SUCCESS =====');
@@ -606,14 +690,37 @@ export function Dashboard() {
         body: JSON.stringify({ analysisId }),
       });
 
-      const result = await response.json();
+      // Ensure response is JSON
+      let result: any;
+      try {
+        const responseText = await response.text();
+        result = responseText ? JSON.parse(responseText) : {};
+      } catch (parseError) {
+        console.error('[Dashboard] Failed to parse response as JSON:', parseError);
+        throw new Error('Invalid response from server');
+      }
+      
       console.log('[Dashboard] Trigger analysis response:', result);
 
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to trigger analysis');
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || result.message || 'Failed to trigger analysis');
       }
 
-      console.log('[Dashboard] Analysis triggered successfully, starting to poll');
+      // Save reportId to localStorage for persistence
+      if (result.reportId) {
+        localStorage.setItem('lastActiveReportId', result.reportId);
+        console.log('[Dashboard] Saved reportId to localStorage:', result.reportId);
+      }
+
+      // Navigate to report status page if reportId is available
+      if (result.reportId) {
+        console.log('[Dashboard] Navigating to report status page:', result.reportId);
+        navigate(`/report-status/${result.reportId}`);
+        return;
+      }
+
+      // Fallback: If no reportId, use old polling flow
+      console.log('[Dashboard] No reportId, falling back to polling');
       setPaymentAnalysisId(analysisId);
       await pollForAnalysisCompletion(analysisId);
     } catch (err: any) {
@@ -641,6 +748,29 @@ export function Dashboard() {
     } catch (err: any) {
       console.error('Failed to cleanup duplicates:', err);
       setCleanupMessage('Failed to cleanup duplicates. Please try again.');
+      setTimeout(() => setCleanupMessage(''), 5000);
+    } finally {
+      setCleaningUp(false);
+    }
+  };
+
+  const handleFixNames = async () => {
+    try {
+      setCleaningUp(true);
+      setCleanupMessage('');
+      const fixed = await fixCorruptedBusinessNames();
+
+      if (fixed > 0) {
+        setCleanupMessage(`Fixed ${fixed} corrupted business name${fixed !== 1 ? 's' : ''}. Please update the name${fixed !== 1 ? 's' : ''} manually.`);
+        await loadBusinesses();
+      } else {
+        setCleanupMessage('No corrupted business names found!');
+      }
+
+      setTimeout(() => setCleanupMessage(''), 5000);
+    } catch (err: any) {
+      console.error('Failed to fix business names:', err);
+      setCleanupMessage('Failed to fix business names. Please try again.');
       setTimeout(() => setCleanupMessage(''), 5000);
     } finally {
       setCleaningUp(false);
@@ -681,6 +811,19 @@ export function Dashboard() {
                 <Trash2 className="w-5 h-5" />
               )}
               {cleaningUp ? 'Cleaning...' : 'Clean Duplicates'}
+            </button>
+            <button
+              onClick={handleFixNames}
+              disabled={cleaningUp}
+              className="flex items-center gap-2 px-4 py-3 bg-white border-2 border-slate-300 hover:border-slate-400 text-slate-700 font-semibold rounded-lg transition-all shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Fix corrupted business names"
+            >
+              {cleaningUp ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <CheckCircle className="w-5 h-5" />
+              )}
+              {cleaningUp ? 'Fixing...' : 'Fix Names'}
             </button>
             <Link
               to="/"
@@ -865,6 +1008,12 @@ export function Dashboard() {
                 a.status !== 'completed' && 
                 (a.review_count === 0 || !a.review_count)
               );
+              
+              // Check for in-progress analyses (extracting, analyzing, saving)
+              const inProgressAnalysis = allAnalyses.find((a: any) => 
+                a.payment_status === 'paid' && 
+                (a.status === 'extracting' || a.status === 'analyzing' || a.status === 'saving')
+              );
 
               return (
                 <div key={business.id}>
@@ -873,7 +1022,45 @@ export function Dashboard() {
                     onUpdateName={handleUpdateName}
                     onDelete={handleDeleteClick}
                   />
-                  {paidIncompleteAnalysis && (
+                  {inProgressAnalysis && (
+                    <div className="mt-4 bg-blue-50 border-2 border-blue-400 p-4 rounded-lg">
+                      <p className="text-blue-800 font-semibold mb-2">
+                        🔄 Analysis in progress
+                      </p>
+                      <p className="text-blue-700 text-sm mb-3">
+                        Your analysis is currently being processed. Click below to view the status.
+                      </p>
+                      <button
+                        onClick={async () => {
+                          // Get reportId from analysisId
+                          try {
+                            const response = await fetch(`/api/report-by-analysis?analysisId=${inProgressAnalysis.id}`);
+                            if (response.ok) {
+                              const result = await response.json();
+                              if (result.reportId) {
+                                localStorage.setItem('lastActiveReportId', result.reportId);
+                                navigate(`/report-status/${result.reportId}`);
+                              } else {
+                                // Fallback: try to create report or navigate anyway
+                                navigate(`/report-status/${inProgressAnalysis.id}`);
+                              }
+                            } else {
+                              // Fallback: navigate with analysisId (ReportStatus will handle it)
+                              navigate(`/report-status/${inProgressAnalysis.id}`);
+                            }
+                          } catch (err) {
+                            console.error('[Dashboard] Error getting reportId:', err);
+                            // Fallback: navigate with analysisId
+                            navigate(`/report-status/${inProgressAnalysis.id}`);
+                          }
+                        }}
+                        className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
+                      >
+                        Continue processing
+                      </button>
+                    </div>
+                  )}
+                  {paidIncompleteAnalysis && !inProgressAnalysis && (
                     <div className="mt-4 bg-yellow-50 border-2 border-yellow-400 p-4 rounded-lg">
                       <p className="text-yellow-800 font-semibold mb-2">
                         ⚠️ Analysis paid but not completed

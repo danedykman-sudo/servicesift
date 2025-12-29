@@ -10,6 +10,7 @@ import {
   getAnalysisByStripeSessionId,
   createBusiness,
   createAnalysis,
+  deleteAnalysis,
   saveRootCauses,
   saveCoachingScripts,
   saveProcessChanges,
@@ -112,6 +113,11 @@ export function LandingPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentSessionId, setPaymentSessionId] = useState<string | null>(null);
   const [pendingAnalysisId, setPendingAnalysisId] = useState<string | null>(null);
+  // Draft data for deferred analysis creation
+  const [pendingBusinessId, setPendingBusinessId] = useState<string | null>(null);
+  const [pendingBusinessName, setPendingBusinessName] = useState<string>('');
+  const [pendingIsBaseline, setPendingIsBaseline] = useState<boolean>(true);
+  const [pendingUrl, setPendingUrl] = useState<string>('');
 
   const headerRef = useRef<HTMLDivElement>(null);
   const rootCausesRef = useRef<HTMLDivElement>(null);
@@ -241,25 +247,14 @@ export function LandingPage() {
         business = await createBusiness(businessName, url);
       }
 
-      // Create analysis record with payment_status='pending' BEFORE opening payment modal
-      console.log('[Payment] Creating analysis record with pending payment');
-      const amount = isBaseline ? FIRST_ANALYSIS_PRICE : REANALYSIS_PRICE;
-      const analysisId = await createAnalysis(
-        business.id,
-        url,
-        businessName,
-        extractedData?.reviewCount || 0,
-        extractedData?.totalScore || 0,
-        isBaseline,
-        null, // paymentId - will be set by webhook
-        undefined, // amountPaid - will be set by webhook
-        'pending' // payment_status - starts as pending
-      );
+      // Store draft data for payment modal (NO analysis created yet)
+      console.log('[Payment] Preparing payment modal with draft data');
+      setPendingBusinessId(business.id);
+      setPendingBusinessName(businessName);
+      setPendingIsBaseline(isBaseline);
+      setPendingUrl(url);
 
-      console.log('[Payment] Analysis created with ID:', analysisId);
-      setPendingAnalysisId(analysisId);
-
-      // Now open payment modal with analysisId
+      // Open payment modal (analysis will be created when user clicks Pay Now)
       setShowPaymentModal(true);
     } catch (err) {
       console.error('[Payment] Error preparing payment:', err);
@@ -1823,16 +1818,40 @@ export function LandingPage() {
 
       <PaymentModal
         isOpen={showPaymentModal}
-        onClose={() => {
+        onClose={async () => {
+          // Cleanup: Delete abandoned draft analysis if it exists
+          if (pendingAnalysisId) {
+            try {
+              console.log('[PaymentModal] Cleaning up abandoned analysis:', pendingAnalysisId);
+              await deleteAnalysis(pendingAnalysisId);
+            } catch (err) {
+              console.error('[PaymentModal] Failed to cleanup abandoned analysis (non-critical):', err);
+            }
+          }
           setShowPaymentModal(false);
-          setPendingAnalysisId(null); // Reset when modal closes
+          setPendingAnalysisId(null);
+          setPendingBusinessId(null);
+          setPendingBusinessName('');
+          setPendingIsBaseline(true);
+          setPendingUrl('');
         }}
         amount={isReanalysis ? REANALYSIS_PRICE : FIRST_ANALYSIS_PRICE}
-        businessName={customBusinessName || extractedData?.businessName || 'Your Business'}
+        businessName={customBusinessName || extractedData?.businessName || pendingBusinessName || 'Your Business'}
         isReanalysis={isReanalysis}
-        url={url}
-        businessId={reanalysisBusinessId || undefined}
+        url={pendingUrl || url}
+        businessId={reanalysisBusinessId || pendingBusinessId || undefined}
         analysisId={pendingAnalysisId}
+        draftData={pendingBusinessId ? {
+          businessId: pendingBusinessId,
+          businessName: pendingBusinessName || customBusinessName || extractedData?.businessName || 'Your Business',
+          url: pendingUrl || url,
+          isBaseline: pendingIsBaseline,
+          reviewCount: extractedData?.reviewCount || 0,
+          averageRating: extractedData?.totalScore || 0,
+        } : undefined}
+        onAnalysisCreated={(analysisId) => {
+          setPendingAnalysisId(analysisId);
+        }}
       />
     </div>
   );

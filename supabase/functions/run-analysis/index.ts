@@ -49,7 +49,32 @@ Deno.serve(async (req: Request) => {
       hasIncomingAuth: !!incomingAuthHeader
     });
     
-    const { analysisId, businessUrl, businessName, traceId }: RunAnalysisRequest = await req.json();
+    // Parse and log the raw request body first
+    const rawBody = await req.json();
+    console.log("[run-analysis] DEBUG: Raw parsed request body:", {
+      rawBody,
+      bodyKeys: Object.keys(rawBody || {}),
+      bodyType: typeof rawBody,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Extract fields with explicit logging
+    const analysisId = rawBody.analysisId || rawBody.analysis_id;
+    const businessUrl = rawBody.businessUrl || rawBody.business_url;
+    const businessName = rawBody.businessName || rawBody.business_name;
+    const traceId = rawBody.traceId || rawBody.trace_id;
+    
+    console.log("[run-analysis] DEBUG: Extracted fields:", {
+      analysisId,
+      businessUrl: businessUrl?.substring(0, 50),
+      businessName,
+      traceId,
+      hasAnalysisId: !!analysisId,
+      hasBusinessUrl: !!businessUrl,
+      hasBusinessName: !!businessName,
+      hasTraceId: !!traceId,
+      timestamp: new Date().toISOString()
+    });
     
     // Log traceId at function start
     console.log("[run-analysis] ===== FUNCTION START =====", {
@@ -69,19 +94,18 @@ Deno.serve(async (req: Request) => {
       timestamp: new Date().toISOString()
     });
 
-    if (!analysisId || !businessUrl) {
+    // Validate required field: analysisId
+    if (!analysisId) {
+      console.error("[run-analysis] Missing required field: analysisId", {
+        receivedFields: Object.keys(rawBody || {}),
+        rawBody,
+        timestamp: new Date().toISOString()
+      });
       return new Response(
-        JSON.stringify({ error: "analysisId and businessUrl are required" }),
+        JSON.stringify({ error: "analysisId is required", receivedFields: Object.keys(rawBody || {}) }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    console.log("[run-analysis] ===== STARTING ANALYSIS =====", {
-      analysisId,
-      businessUrl,
-      businessName,
-      timestamp: new Date().toISOString(),
-    });
 
     // Get environment variables
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -156,11 +180,34 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Use database values if not provided in request
+    const finalBusinessUrl = businessUrl || analysis.business_url;
+    const finalBusinessName = businessName || analysis.business_name;
+
+    // Validate that we have businessUrl (either from request or database)
+    if (!finalBusinessUrl) {
+      console.error("[run-analysis] Missing required field: businessUrl (not in request and not in database)", {
+        receivedFields: Object.keys(rawBody || {}),
+        rawBody,
+        analysisBusinessUrl: analysis.business_url,
+        timestamp: new Date().toISOString()
+      });
+      return new Response(
+        JSON.stringify({ error: "businessUrl is required (not found in request or database)", receivedFields: Object.keys(rawBody || {}) }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     console.log("[run-analysis] DEBUG: Analysis record found", {
       analysisId,
       currentStatus: analysis.status,
       paymentStatus: analysis.payment_status,
-      hasBusinessUrl: !!analysis.business_url,
+      businessUrlFromRequest: businessUrl,
+      businessUrlFromDb: analysis.business_url,
+      finalBusinessUrl,
+      businessNameFromRequest: businessName,
+      businessNameFromDb: analysis.business_name,
+      finalBusinessName,
       timestamp: new Date().toISOString()
     });
 
@@ -170,7 +217,7 @@ Deno.serve(async (req: Request) => {
       // Step 1: Extract reviews
       console.log("[run-analysis] Step 1/3: Extracting reviews", {
         analysisId,
-        businessUrl: businessUrl.substring(0, 50),
+        businessUrl: finalBusinessUrl.substring(0, 50),
         timestamp: new Date().toISOString()
       });
       
@@ -200,14 +247,10 @@ Deno.serve(async (req: Request) => {
         "Content-Type": "application/json",
       };
 
-      // Forward incoming Authorization header (user JWT) to extract-reviews
-      if (incomingAuthHeader) {
-        extractHeaders["Authorization"] = incomingAuthHeader;
-      }
-      
-      // Also include apikey header
-      if (supabaseAnonKey) {
-        extractHeaders["apikey"] = supabaseAnonKey;
+      // Use service role key for extract-reviews (not user JWT)
+      if (supabaseServiceRoleKey) {
+        extractHeaders["Authorization"] = `Bearer ${supabaseServiceRoleKey}`;
+        extractHeaders["apikey"] = supabaseServiceRoleKey;
       }
 
       const extractUrl = `${supabaseUrl}/functions/v1/extract-reviews`;
@@ -223,7 +266,7 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: extractHeaders,
         body: JSON.stringify({
-          url: businessUrl,
+          url: finalBusinessUrl,
           maxReviews: 200,
           traceId,
         }),
@@ -375,24 +418,21 @@ Deno.serve(async (req: Request) => {
         "Content-Type": "application/json",
       };
 
-      // Forward incoming Authorization header (user JWT) to analyze-reviews
-      if (incomingAuthHeader) {
-        analyzeHeaders["Authorization"] = incomingAuthHeader;
-      }
-      
-      // Also include apikey header
-      if (supabaseAnonKey) {
-        analyzeHeaders["apikey"] = supabaseAnonKey;
+      // Use service role key for analyze-reviews (not user JWT)
+      if (supabaseServiceRoleKey) {
+        analyzeHeaders["Authorization"] = `Bearer ${supabaseServiceRoleKey}`;
+        analyzeHeaders["apikey"] = supabaseServiceRoleKey;
       }
 
       const analyzeUrl = `${supabaseUrl}/functions/v1/analyze-reviews`;
       const analyzeRequestBody = {
-        businessName: businessName || analysis.business_name || extractData.businessName,
+        businessName: finalBusinessName || extractData.businessName,
         reviews: extractData.reviews?.map((r: any) => ({
           text: r.text || r.reviewText || "",
           rating: r.rating || r.stars || 0,
           date: r.date || r.reviewDate || "",
         })) || [],
+        traceId,
       };
       
       console.log("[run-analysis] DEBUG: Calling analyze-reviews edge function", {
@@ -684,20 +724,253 @@ Deno.serve(async (req: Request) => {
       }
 
       // Update analysis with completion status
+      const reviewCountToSave = extractData.reviewCount || 0;
+      const averageRatingToSave = extractData.totalScore || 0;
+      
+      console.log("[run-analysis] DEBUG: Updating analysis to completed", {
+        analysisId,
+        reviewCount: reviewCountToSave,
+        averageRating: averageRatingToSave,
+        extractDataReviewCount: extractData.reviewCount,
+        extractDataTotalScore: extractData.totalScore,
+        timestamp: new Date().toISOString()
+      });
+      
       const { error: updateError } = await supabase
         .from("analyses")
         .update({
           status: "completed",
           completed_at: new Date().toISOString(),
-          review_count: extractData.reviewCount || 0,
-          average_rating: extractData.totalScore || 0,
+          review_count: reviewCountToSave,
+          average_rating: averageRatingToSave,
           error_message: null, // Clear any previous errors
         })
         .eq("id", analysisId);
 
       if (updateError) {
-        console.error("[run-analysis] Failed to update analysis status:", updateError);
+        console.error("[run-analysis] Failed to update analysis status:", {
+          error: updateError,
+          analysisId,
+          reviewCount: reviewCountToSave,
+          timestamp: new Date().toISOString()
+        });
         throw new Error(`SAVE_FAILED: Analysis status - ${updateError.message}`);
+      }
+      
+      console.log("[run-analysis] DEBUG: Analysis status updated to completed successfully", {
+        analysisId,
+        reviewCount: reviewCountToSave,
+        averageRating: averageRatingToSave,
+        timestamp: new Date().toISOString()
+      });
+
+      // Phase 1 Step 1: Create report record and JSON artifact
+      let reportId: string | undefined;
+      try {
+        console.log("[run-analysis] Creating report record for analysis:", analysisId);
+        
+        // Check if report already exists
+        const { data: existingReport } = await supabase
+          .from("reports")
+          .select("id, latest_artifact_version")
+          .eq("analysis_id", analysisId)
+          .maybeSingle();
+
+        let artifactVersion = 1;
+
+        if (existingReport) {
+          reportId = existingReport.id;
+          artifactVersion = (existingReport.latest_artifact_version || 1) + 1;
+          
+          // Update existing report to READY
+          const { error: updateError } = await supabase
+            .from("reports")
+            .update({
+              status: "READY",
+              latest_artifact_version: artifactVersion,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", reportId);
+
+          if (updateError) {
+            console.error("[run-analysis] Failed to update existing report:", updateError);
+          } else {
+            console.log("[run-analysis] Updated existing report to READY:", reportId);
+          }
+        } else {
+          // Create new report
+          const reportData: any = {
+            analysis_id: analysisId,
+            business_id: analysis.business_id,
+            stripe_checkout_session_id: analysis.stripe_checkout_session_id,
+            status: "READY",
+            coverage_level: 200,
+            run_type: "SNAPSHOT",
+            latest_artifact_version: 1
+          };
+
+          const { data: newReport, error: reportError } = await supabase
+            .from("reports")
+            .insert(reportData)
+            .select("id")
+            .single();
+
+          if (reportError) {
+            console.error("[run-analysis] Failed to create report:", reportError);
+            // Non-critical - continue without report
+          } else {
+            reportId = newReport.id;
+            artifactVersion = 1;
+            console.log("[run-analysis] Created report:", reportId);
+          }
+        }
+
+        // Create JSON artifact if report was created/updated
+        if (reportId) {
+          try {
+            // Prepare JSON data structure
+            const jsonData = {
+              analysis_id: analysisId,
+              business_id: analysis.business_id,
+              business_name: analysis.business_name,
+              business_url: analysis.business_url,
+              review_count: reviewCountToSave,
+              average_rating: averageRatingToSave,
+              root_causes: analysisResult.topRootCauses || [],
+              coaching_scripts: analysisResult.staffCoaching || [],
+              process_changes: analysisResult.processChanges || [],
+              backlog_tasks: analysisResult.backlog || [],
+              created_at: analysis.created_at,
+              completed_at: new Date().toISOString(),
+              version: artifactVersion
+            };
+
+            const jsonString = JSON.stringify(jsonData, null, 2);
+            const jsonBlob = new Blob([jsonString], { type: "application/json" });
+            
+            // Store in Supabase Storage
+            const userId = analysis.user_id;
+            const storagePath = `${userId}/${analysisId}/v${artifactVersion}/analysis.json`;
+            
+            const { error: storageError } = await supabase.storage
+              .from("report-artifacts")
+              .upload(storagePath, jsonBlob, {
+                contentType: "application/json",
+                upsert: false
+              });
+
+            if (storageError) {
+              console.error("[run-analysis] Failed to upload JSON to storage:", storageError);
+            } else {
+              // Create artifact record
+              const { error: artifactError } = await supabase
+                .from("report_artifacts")
+                .insert({
+                  report_id: reportId,
+                  kind: "json",
+                  storage_path: storagePath,
+                  version: artifactVersion
+                });
+
+              if (artifactError) {
+                console.error("[run-analysis] Failed to create artifact record:", artifactError);
+              } else {
+                console.log("[run-analysis] Created JSON artifact:", storagePath);
+
+                // Trigger PDF generation (best-effort, non-blocking)
+                // Use reportId (not analysisId) - this is the real report ID from reports table
+                console.log("[run-analysis] Invoking generate-pdf-report edge function with reportId:", reportId);
+                
+                // Helper function to call PDF generation with retry
+                async function callGeneratePdfWithRetry(url: string, headers: Record<string, string>, body: string, maxRetries = 2) {
+                  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                      console.log(`[run-analysis] PDF generation attempt ${attempt}/${maxRetries}`);
+                      const response = await fetch(url, { method: "POST", headers, body });
+                      
+                      if (response.ok) {
+                        const responseData = await response.json().catch(() => null);
+                        console.log("[run-analysis] Successfully invoked PDF generation:", {
+                          reportId,
+                          attempt,
+                          status: response.status,
+                          response: responseData,
+                        });
+                        return { success: true, response };
+                      }
+                      
+                      const errorText = await response.text();
+                      console.error(`[run-analysis] PDF generation attempt ${attempt} failed:`, {
+                        reportId,
+                        status: response.status,
+                        statusText: response.statusText,
+                        body: errorText.substring(0, 500)
+                      });
+                      
+                      if (attempt < maxRetries) {
+                        console.log(`[run-analysis] Waiting 3s before retry...`);
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                      }
+                    } catch (err) {
+                      console.error(`[run-analysis] PDF generation attempt ${attempt} error:`, {
+                        reportId,
+                        error: err,
+                        errorMessage: err instanceof Error ? err.message : "Unknown error"
+                      });
+                      
+                      if (attempt < maxRetries) {
+                        console.log(`[run-analysis] Waiting 3s before retry...`);
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                      }
+                    }
+                  }
+                  return { success: false };
+                }
+                
+                try {
+                  // Use service role key for PDF generation (not user JWT)
+                  // generate-pdf-report has verify_jwt=false and uses service role internally
+                  const generatePdfUrl = `${supabaseUrl}/functions/v1/generate-pdf-report`;
+                  const generatePdfHeaders: Record<string, string> = {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${supabaseServiceRoleKey}`,
+                    "apikey": supabaseServiceRoleKey || "",
+                  };
+
+                  // Log before call
+                  console.log("[run-analysis] PDF generation call details:", {
+                    reportId,
+                    url: generatePdfUrl,
+                    hasAuthorization: !!generatePdfHeaders["Authorization"],
+                    hasApikey: !!generatePdfHeaders["apikey"],
+                    authType: "service-role-key",
+                  });
+
+                  const result = await callGeneratePdfWithRetry(
+                    generatePdfUrl,
+                    generatePdfHeaders,
+                    JSON.stringify({ reportId })
+                  );
+                  
+                  if (!result.success) {
+                    console.error("[run-analysis] PDF generation failed after all retries (non-critical):", { reportId });
+                  }
+                } catch (pdfTriggerError) {
+                  console.error("[run-analysis] Error invoking PDF generation (non-critical):", {
+                    reportId,
+                    error: pdfTriggerError,
+                    errorMessage: pdfTriggerError instanceof Error ? pdfTriggerError.message : "Unknown error",
+                  });
+                  // Don't throw - this is best-effort, analysis should continue
+                }
+              }
+            }
+          } catch (artifactErr) {
+            console.error("[run-analysis] Error creating JSON artifact:", artifactErr);
+          }
+        }
+      } catch (reportErr) {
+        console.error("[run-analysis] Error in report creation (non-critical):", reportErr);
       }
 
       const totalDuration = Date.now() - analysisStartTime;
