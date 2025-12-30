@@ -931,21 +931,29 @@ Deno.serve(async (req: Request) => {
                   // Use internal secret for PDF generation (edge-to-edge auth)
                   const generatePdfUrl = `${supabaseUrl}/functions/v1/generate-pdf-report`;
                   const pdfInternalSecret = Deno.env.get("PDF_INTERNAL_SECRET");
-                  
+                  const apiKeyHeaderValue = supabaseAnonKey || supabaseServiceRoleKey;
+
                   const generatePdfHeaders: Record<string, string> = {
                     "Content-Type": "application/json",
                   };
-                  
+
+                  // Add headers required by Supabase gateway
+                  if (apiKeyHeaderValue) {
+                    generatePdfHeaders["apikey"] = apiKeyHeaderValue;
+                  }
+
                   // Add internal secret for authentication
                   if (pdfInternalSecret) {
                     generatePdfHeaders["x-internal-secret"] = pdfInternalSecret;
                   }
 
-                  // Log before call
+                  // Log before call (confirm gateway headers present)
                   console.log("[run-analysis] PDF generation call details:", {
                     reportId,
                     url: generatePdfUrl,
                     hasInternalSecret: !!pdfInternalSecret,
+                    hasAuthorization: false,
+                    hasApikey: !!apiKeyHeaderValue,
                     authType: "internal-secret",
                   });
 

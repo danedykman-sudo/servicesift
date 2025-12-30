@@ -7,6 +7,15 @@ interface GeneratePdfRequest {
 }
 
 Deno.serve(async (req: Request) => {
+  const internalSecretHeader = !!req.headers.get("x-internal-secret");
+  // Early log to confirm function execution (before any other processing)
+  console.log("[generate-pdf-report] START", { 
+    hasInternalSecret: internalSecretHeader,
+    hasSecretLoaded: !!Deno.env.get("PDF_INTERNAL_SECRET"),
+    method: req.method,
+    url: req.url 
+  });
+
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",

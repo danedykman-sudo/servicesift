@@ -1,1 +1,2 @@
+# Keep JWT verification disabled so the internal-secret-only flow reaches the function.
 verify_jwt = false
