@@ -76,6 +76,7 @@ export function PaymentModal({
 
       console.log('[PaymentModal] Starting free analysis for:', url);
 
+      console.log('[PaymentModal] Calling /api/free-run-analysis');
       const response = await fetch('/api/free-run-analysis', {
         method: 'POST',
         headers: {
@@ -88,6 +89,15 @@ export function PaymentModal({
         }),
       });
 
+      console.log('[PaymentModal] Free run response status:', response.status);
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('[PaymentModal] Free run API error:', response.status, text);
+        throw new Error(`API returned ${response.status}: ${text.substring(0, 100)}`);
+      }
+
+      console.log('[PaymentModal] Free run API ok, parsing JSON');
       const result = await response.json();
 
       if (!response.ok || !result.success) {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Loader2, CheckCircle, AlertCircle, FileJson, Eye, ArrowLeft, Copy, FileDown } from 'lucide-react';
+import { FEATURES } from '../config/features';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ReportStatusResponse {
@@ -289,116 +290,118 @@ export function ReportStatus() {
 
               {/* View Report, Download PDF, and JSON buttons - Only when READY */}
               {isReady && reportStatus?.analysis_id && (
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-col sm:flex-row gap-4">
-                    <Link
-                      to={`/report/${reportStatus.analysis_id}`}
-                      className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
-                    >
-                      <Eye className="w-5 h-5" />
-                      View Report
-                    </Link>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <Link
+                        to={`/report/${reportStatus.analysis_id}`}
+                        className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
+                      >
+                        <Eye className="w-5 h-5" />
+                        View Report
+                      </Link>
+                      {FEATURES.ENABLE_PDF_GENERATION && (
+                        <button
+                          onClick={async () => {
+                            if (!reportId || loadingPdf) return;
+                            
+                            setLoadingPdf(true);
+                            try {
+                              const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+                              
+                              if (!response.ok) {
+                                if (response.status === 404) {
+                                  setError('PDF artifact not found. The report may still be generating. Please try again in a moment.');
+                                } else {
+                                  const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
+                                  setError(errorData.error || 'Failed to load PDF artifact');
+                                }
+                                return;
+                              }
+
+                              const data = await response.json();
+                              if (data.url) {
+                                // Download PDF
+                                const link = document.createElement('a');
+                                link.href = data.url;
+                                link.download = `report-${reportId}.pdf`;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              } else {
+                                setError('Invalid response from server');
+                              }
+                            } catch (err) {
+                              console.error('[ReportStatus] Error loading PDF:', err);
+                              setError('Failed to load PDF. Please try again.');
+                            } finally {
+                              setLoadingPdf(false);
+                            }
+                          }}
+                          disabled={loadingPdf}
+                          className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {loadingPdf ? (
+                            <>
+                              <Loader2 className="w-5 h-5 animate-spin" />
+                              Loading...
+                            </>
+                          ) : (
+                            <>
+                              <FileDown className="w-5 h-5" />
+                              Download PDF
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                     <button
                       onClick={async () => {
-                        if (!reportId || loadingPdf) return;
+                        if (!reportId || loadingJson) return;
                         
-                        setLoadingPdf(true);
+                        setLoadingJson(true);
                         try {
-                          const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+                          const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=json`);
                           
                           if (!response.ok) {
                             if (response.status === 404) {
-                              setError('PDF artifact not found. The PDF may still be generating. Please try again in a moment.');
+                              setError('JSON artifact not found. The report may still be processing.');
                             } else {
-                              const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
-                              setError(errorData.error || 'Failed to load PDF artifact');
+                              const errorData = await response.json().catch(() => ({ error: 'Failed to load JSON' }));
+                              setError(errorData.error || 'Failed to load JSON artifact');
                             }
                             return;
                           }
 
                           const data = await response.json();
                           if (data.url) {
-                            // Download PDF
-                            const link = document.createElement('a');
-                            link.href = data.url;
-                            link.download = `report-${reportId}.pdf`;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
+                            // Open JSON URL in new tab
+                            window.open(data.url, '_blank');
                           } else {
                             setError('Invalid response from server');
                           }
                         } catch (err) {
-                          console.error('[ReportStatus] Error loading PDF:', err);
-                          setError('Failed to load PDF. Please try again.');
+                          console.error('[ReportStatus] Error loading JSON:', err);
+                          setError('Failed to load JSON. Please try again.');
                         } finally {
-                          setLoadingPdf(false);
+                          setLoadingJson(false);
                         }
                       }}
-                      disabled={loadingPdf}
-                      className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={loadingJson}
+                      className="flex items-center justify-center gap-2 px-6 py-3 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold rounded-lg transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {loadingPdf ? (
+                      {loadingJson ? (
                         <>
                           <Loader2 className="w-5 h-5 animate-spin" />
                           Loading...
                         </>
                       ) : (
                         <>
-                          <FileDown className="w-5 h-5" />
-                          Download PDF
+                          <FileJson className="w-5 h-5" />
+                          Developer: Open JSON
                         </>
                       )}
                     </button>
                   </div>
-                  <button
-                    onClick={async () => {
-                      if (!reportId || loadingJson) return;
-                      
-                      setLoadingJson(true);
-                      try {
-                        const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=json`);
-                        
-                        if (!response.ok) {
-                          if (response.status === 404) {
-                            setError('JSON artifact not found. The report may still be processing.');
-                          } else {
-                            const errorData = await response.json().catch(() => ({ error: 'Failed to load JSON' }));
-                            setError(errorData.error || 'Failed to load JSON artifact');
-                          }
-                          return;
-                        }
-
-                        const data = await response.json();
-                        if (data.url) {
-                          // Open JSON URL in new tab
-                          window.open(data.url, '_blank');
-                        } else {
-                          setError('Invalid response from server');
-                        }
-                      } catch (err) {
-                        console.error('[ReportStatus] Error loading JSON:', err);
-                        setError('Failed to load JSON. Please try again.');
-                      } finally {
-                        setLoadingJson(false);
-                      }
-                    }}
-                    disabled={loadingJson}
-                    className="flex items-center justify-center gap-2 px-6 py-3 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold rounded-lg transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loadingJson ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        Loading...
-                      </>
-                    ) : (
-                      <>
-                        <FileJson className="w-5 h-5" />
-                        Developer: Open JSON
-                      </>
-                    )}
-                  </button>
-                </div>
               )}
             </div>
           )}

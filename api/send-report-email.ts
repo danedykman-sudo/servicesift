@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
+const FEATURES = {
+  ENABLE_EMAIL_SHARING: false,
+} as const;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': 'https://service-sift.com',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -7,6 +11,9 @@ const corsHeaders = {
 };
 
 export default async function handler(req: any, res: any) {
+  if (!FEATURES.ENABLE_EMAIL_SHARING) {
+    return res.status(404).json({ error: 'Email sharing disabled in MVP' });
+  }
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);

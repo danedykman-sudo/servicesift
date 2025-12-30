@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
+const FEATURES = {
+  ENABLE_PDF_GENERATION: false,
+} as const;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': 'https://service-sift.com',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -24,11 +28,16 @@ export default async function handler(req: any, res: any) {
   try {
     // Get reportId and kind from query params
     const reportId = req.query.reportId;
-    const kind = req.query.kind || 'json';
+    const kind = (req.query.kind || 'json') as string;
 
     if (!reportId) {
       res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
       return res.status(400).json({ error: 'reportId is required' });
+    }
+
+    if (kind === 'pdf' && !FEATURES.ENABLE_PDF_GENERATION) {
+      res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
+      return res.status(404).json({ error: 'PDF generation disabled in MVP' });
     }
 
     // Validate kind

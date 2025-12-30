@@ -31,12 +31,29 @@ import {
   type BaselineDriftComparison
 } from '../lib/deltaAnalysis';
 import { Header } from '../components/Header';
+import { FEATURES } from '../config/features';
 
 type TabType = 'pulse' | 'newSince' | 'baseline';
 
 export function DeltaReport() {
   const { analysisId } = useParams<{ analysisId: string }>();
   const navigate = useNavigate();
+
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+        <Header />
+        <div className="max-w-3xl mx-auto px-4 py-20">
+          <div className="bg-white rounded-2xl shadow-xl border-2 border-blue-100 p-10 text-center">
+            <h1 className="text-3xl font-bold text-slate-900 mb-4">Delta Analysis Disabled</h1>
+            <p className="text-slate-600">
+              The 3-lens comparison dashboard is temporarily hidden while we focus on core MVP flows.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -8,6 +8,11 @@ interface RunAnalysisRequest {
   traceId?: string;
 }
 
+const FEATURES = {
+  ENABLE_DELTA_ANALYSIS: false,
+  ENABLE_PDF_GENERATION: false,
+} as const;
+
 Deno.serve(async (req: Request) => {
   // #region agent log
   console.log(JSON.stringify({location:'supabase/functions/run-analysis/index.ts:10',message:'Edge function entry point',data:{method:req.method,url:req.url,hasBody:!!req.body},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
@@ -879,100 +884,102 @@ Deno.serve(async (req: Request) => {
 
                 // Trigger PDF generation (best-effort, non-blocking)
                 // Use reportId (not analysisId) - this is the real report ID from reports table
-                console.log("[run-analysis] Invoking generate-pdf-report edge function with reportId:", reportId);
-                
-                // Helper function to call PDF generation with retry
-                async function callGeneratePdfWithRetry(url: string, headers: Record<string, string>, body: string, maxRetries = 2) {
-                  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                      console.log(`[run-analysis] PDF generation attempt ${attempt}/${maxRetries}`);
-                      const response = await fetch(url, { method: "POST", headers, body });
-                      
-                      if (response.ok) {
-                        const responseData = await response.json().catch(() => null);
-                        console.log("[run-analysis] Successfully invoked PDF generation:", {
+                if (FEATURES.ENABLE_PDF_GENERATION) {
+                  console.log("[run-analysis] Invoking generate-pdf-report edge function with reportId:", reportId);
+                  
+                  // Helper function to call PDF generation with retry
+                  async function callGeneratePdfWithRetry(url: string, headers: Record<string, string>, body: string, maxRetries = 2) {
+                    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                      try {
+                        console.log(`[run-analysis] PDF generation attempt ${attempt}/${maxRetries}`);
+                        const response = await fetch(url, { method: "POST", headers, body });
+                        
+                        if (response.ok) {
+                          const responseData = await response.json().catch(() => null);
+                          console.log("[run-analysis] Successfully invoked PDF generation:", {
+                            reportId,
+                            attempt,
+                            status: response.status,
+                            response: responseData,
+                          });
+                          return { success: true, response };
+                        }
+                        
+                        const errorText = await response.text();
+                        console.error(`[run-analysis] PDF generation attempt ${attempt} failed:`, {
                           reportId,
-                          attempt,
                           status: response.status,
-                          response: responseData,
+                          statusText: response.statusText,
+                          body: errorText.substring(0, 500)
                         });
-                        return { success: true, response };
-                      }
-                      
-                      const errorText = await response.text();
-                      console.error(`[run-analysis] PDF generation attempt ${attempt} failed:`, {
-                        reportId,
-                        status: response.status,
-                        statusText: response.statusText,
-                        body: errorText.substring(0, 500)
-                      });
-                      
-                      if (attempt < maxRetries) {
-                        console.log(`[run-analysis] Waiting 3s before retry...`);
-                        await new Promise(resolve => setTimeout(resolve, 3000));
-                      }
-                    } catch (err) {
-                      console.error(`[run-analysis] PDF generation attempt ${attempt} error:`, {
-                        reportId,
-                        error: err,
-                        errorMessage: err instanceof Error ? err.message : "Unknown error"
-                      });
-                      
-                      if (attempt < maxRetries) {
-                        console.log(`[run-analysis] Waiting 3s before retry...`);
-                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        
+                        if (attempt < maxRetries) {
+                          console.log(`[run-analysis] Waiting 3s before retry...`);
+                          await new Promise(resolve => setTimeout(resolve, 3000));
+                        }
+                      } catch (err) {
+                        console.error(`[run-analysis] PDF generation attempt ${attempt} error:`, {
+                          reportId,
+                          error: err,
+                          errorMessage: err instanceof Error ? err.message : "Unknown error"
+                        });
+                        
+                        if (attempt < maxRetries) {
+                          console.log(`[run-analysis] Waiting 3s before retry...`);
+                          await new Promise(resolve => setTimeout(resolve, 3000));
+                        }
                       }
                     }
+                    return { success: false };
                   }
-                  return { success: false };
-                }
-                
-                try {
-                  // Use internal secret for PDF generation (edge-to-edge auth)
-                  const generatePdfUrl = `${supabaseUrl}/functions/v1/generate-pdf-report`;
-                  const pdfInternalSecret = Deno.env.get("PDF_INTERNAL_SECRET");
-                  const apiKeyHeaderValue = supabaseAnonKey || supabaseServiceRoleKey;
-
-                  const generatePdfHeaders: Record<string, string> = {
-                    "Content-Type": "application/json",
-                  };
-
-                  // Add headers required by Supabase gateway
-                  if (apiKeyHeaderValue) {
-                    generatePdfHeaders["apikey"] = apiKeyHeaderValue;
-                  }
-
-                  // Add internal secret for authentication
-                  if (pdfInternalSecret) {
-                    generatePdfHeaders["x-internal-secret"] = pdfInternalSecret;
-                  }
-
-                  // Log before call (confirm gateway headers present)
-                  console.log("[run-analysis] PDF generation call details:", {
-                    reportId,
-                    url: generatePdfUrl,
-                    hasInternalSecret: !!pdfInternalSecret,
-                    hasAuthorization: false,
-                    hasApikey: !!apiKeyHeaderValue,
-                    authType: "internal-secret",
-                  });
-
-                  const result = await callGeneratePdfWithRetry(
-                    generatePdfUrl,
-                    generatePdfHeaders,
-                    JSON.stringify({ reportId })
-                  );
                   
-                  if (!result.success) {
-                    console.error("[run-analysis] PDF generation failed after all retries (non-critical):", { reportId });
+                  try {
+                    // Use internal secret for PDF generation (edge-to-edge auth)
+                    const generatePdfUrl = `${supabaseUrl}/functions/v1/generate-pdf-report`;
+                    const pdfInternalSecret = Deno.env.get("PDF_INTERNAL_SECRET");
+                    const apiKeyHeaderValue = supabaseAnonKey || supabaseServiceRoleKey;
+
+                    const generatePdfHeaders: Record<string, string> = {
+                      "Content-Type": "application/json",
+                    };
+
+                    // Add headers required by Supabase gateway
+                    if (apiKeyHeaderValue) {
+                      generatePdfHeaders["apikey"] = apiKeyHeaderValue;
+                    }
+
+                    // Add internal secret for authentication
+                    if (pdfInternalSecret) {
+                      generatePdfHeaders["x-internal-secret"] = pdfInternalSecret;
+                    }
+
+                    // Log before call (confirm gateway headers present)
+                    console.log("[run-analysis] PDF generation call details:", {
+                      reportId,
+                      url: generatePdfUrl,
+                      hasInternalSecret: !!pdfInternalSecret,
+                      hasAuthorization: false,
+                      hasApikey: !!apiKeyHeaderValue,
+                      authType: "internal-secret",
+                    });
+
+                    const result = await callGeneratePdfWithRetry(
+                      generatePdfUrl,
+                      generatePdfHeaders,
+                      JSON.stringify({ reportId })
+                    );
+                    
+                    if (!result.success) {
+                      console.error("[run-analysis] PDF generation failed after all retries (non-critical):", { reportId });
+                    }
+                  } catch (pdfTriggerError) {
+                    console.error("[run-analysis] Error invoking PDF generation (non-critical):", {
+                      reportId,
+                      error: pdfTriggerError,
+                      errorMessage: pdfTriggerError instanceof Error ? pdfTriggerError.message : "Unknown error",
+                    });
+                    // Don't throw - this is best-effort, analysis should continue
                   }
-                } catch (pdfTriggerError) {
-                  console.error("[run-analysis] Error invoking PDF generation (non-critical):", {
-                    reportId,
-                    error: pdfTriggerError,
-                    errorMessage: pdfTriggerError instanceof Error ? pdfTriggerError.message : "Unknown error",
-                  });
-                  // Don't throw - this is best-effort, analysis should continue
                 }
               }
             }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import { FEATURES } from '../config/features';
 import {
   ArrowLeft,
   Download,
@@ -194,58 +195,60 @@ export function ViewReport() {
             <ArrowLeft className="w-5 h-5" />
             Back to Dashboard
           </Link>
-          <button
-            onClick={async () => {
-              if (!reportId || loadingPdf) return;
-              
-              setLoadingPdf(true);
-              try {
-                const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+          {FEATURES.ENABLE_PDF_GENERATION && (
+            <button
+              onClick={async () => {
+                if (!reportId || loadingPdf) return;
                 
-                if (!response.ok) {
-                  if (response.status === 404) {
-                    setError('PDF artifact not found. The PDF may still be generating. Please try again in a moment.');
-                  } else {
-                    const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
-                    setError(errorData.error || 'Failed to load PDF artifact');
+                setLoadingPdf(true);
+                try {
+                  const response = await fetch(`/api/mint-report-artifact-url?reportId=${reportId}&kind=pdf`);
+                  
+                  if (!response.ok) {
+                    if (response.status === 404) {
+                      setError('PDF artifact not found. The PDF may still be generating. Please try again in a moment.');
+                    } else {
+                      const errorData = await response.json().catch(() => ({ error: 'Failed to load PDF' }));
+                      setError(errorData.error || 'Failed to load PDF artifact');
+                    }
+                    return;
                   }
-                  return;
-                }
 
-                const data = await response.json();
-                if (data.url) {
-                  // Download PDF
-                  const link = document.createElement('a');
-                  link.href = data.url;
-                  link.download = `report-${reportId}.pdf`;
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                } else {
-                  setError('Invalid response from server');
+                  const data = await response.json();
+                  if (data.url) {
+                    // Download PDF
+                    const link = document.createElement('a');
+                    link.href = data.url;
+                    link.download = `report-${reportId}.pdf`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  } else {
+                    setError('Invalid response from server');
+                  }
+                } catch (err) {
+                  console.error('[ViewReport] Error loading PDF:', err);
+                  setError('Failed to load PDF. Please try again.');
+                } finally {
+                  setLoadingPdf(false);
                 }
-              } catch (err) {
-                console.error('[ViewReport] Error loading PDF:', err);
-                setError('Failed to load PDF. Please try again.');
-              } finally {
-                setLoadingPdf(false);
-              }
-            }}
-            disabled={!reportId || loadingPdf}
-            className="flex items-center gap-2 px-4 py-2 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-semibold rounded-lg transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loadingPdf ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Loading...
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5" />
-                Download PDF
-              </>
-            )}
-          </button>
+              }}
+              disabled={!reportId || loadingPdf}
+              className="flex items-center gap-2 px-4 py-2 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-semibold rounded-lg transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loadingPdf ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5" />
+                  Download PDF
+                </>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Error Message */}
@@ -575,6 +578,7 @@ function AnalysisHistoryViewButton({ analysisId }: { analysisId: string }) {
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (!FEATURES.ENABLE_DELTA_ANALYSIS) return;
     checkForDelta();
   }, [analysisId]);
 
@@ -590,8 +594,10 @@ function AnalysisHistoryViewButton({ analysisId }: { analysisId: string }) {
     }
   };
 
+  const showDeltaLink = FEATURES.ENABLE_DELTA_ANALYSIS && hasDelta;
+
   const handleView = () => {
-    if (hasDelta) {
+    if (showDeltaLink) {
       navigate(`/delta/${analysisId}`);
     } else {
       navigate(`/report/${analysisId}`);
@@ -604,7 +610,7 @@ function AnalysisHistoryViewButton({ analysisId }: { analysisId: string }) {
       disabled={checkingDelta}
       className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
     >
-      {hasDelta ? (
+      {showDeltaLink ? (
         <>
           <TrendingUp className="w-4 h-4" />
           View Comparison

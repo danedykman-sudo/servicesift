@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
+const FEATURES = {
+  ENABLE_MANUAL_TRIGGERS: false,
+} as const;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': 'https://service-sift.com',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -11,6 +15,9 @@ const corsHeaders = {
  * This can be called directly with an analysisId if the automatic trigger fails
  */
 export default async function handler(req: any, res: any) {
+  if (!FEATURES.ENABLE_MANUAL_TRIGGERS) {
+    return res.status(404).json({ error: 'Manual triggers disabled - contact support if analysis is stuck' });
+  }
   console.log('[trigger-analysis] ===== HANDLER CALLED =====');
   console.log('[trigger-analysis] Request:', {
     method: req.method,

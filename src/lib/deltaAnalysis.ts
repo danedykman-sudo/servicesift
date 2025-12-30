@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { RootCause } from './database';
+import { FEATURES } from '../config/features';
 import {
   filterReviewsByDateRange,
   getLast30Days,
@@ -101,7 +102,10 @@ function findMatchingCause(
 export async function compareAnalyses(
   baselineId: string,
   newAnalysisId: string
-): Promise<DeltaAnalysis> {
+): Promise<DeltaAnalysis | null> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return null;
+  }
   const { data: baselineCauses, error: baselineError } = await supabase
     .from('root_causes')
     .select('*')
@@ -205,6 +209,9 @@ export async function saveDeltaAnalysis(
   baselineId: string,
   deltaData: DeltaAnalysis
 ): Promise<void> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return;
+  }
   const { error } = await supabase
     .from('analysis_deltas')
     .insert({
@@ -217,6 +224,9 @@ export async function saveDeltaAnalysis(
 }
 
 export async function getDeltaAnalysis(analysisId: string): Promise<DeltaAnalysis | null> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return null;
+  }
   const { data, error } = await supabase
     .from('analysis_deltas')
     .select('delta_data')
@@ -228,6 +238,9 @@ export async function getDeltaAnalysis(analysisId: string): Promise<DeltaAnalysi
 }
 
 export async function getPulseComparison(analysisId: string): Promise<PulseComparison | null> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return null;
+  }
   const { data: reviews, error } = await supabase
     .from('reviews')
     .select('*')
@@ -263,6 +276,9 @@ export async function getNewSinceLastRunComparison(
   analysisId: string,
   previousAnalysisDate: Date
 ): Promise<NewSinceLastRunComparison | null> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return null;
+  }
   const { data: reviews, error } = await supabase
     .from('reviews')
     .select('*')
@@ -298,6 +314,9 @@ export async function getNewSinceLastRunComparison(
 }
 
 export async function getBaselineDriftComparison(analysisId: string): Promise<BaselineDriftComparison | null> {
+  if (!FEATURES.ENABLE_DELTA_ANALYSIS) {
+    return null;
+  }
   const { data: reviews, error } = await supabase
     .from('reviews')
     .select('*')

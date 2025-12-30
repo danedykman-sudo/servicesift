@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Star, Edit2, Trash2, Check, X, BarChart3, Calendar, TrendingUp } from 'lucide-react';
+import { FEATURES } from '../config/features';
 import { BusinessWithLatestAnalysis } from '../lib/database';
 
 interface BusinessCardProps {
@@ -151,7 +152,7 @@ export function BusinessCard({ business, onUpdateName, onDelete }: BusinessCardP
                 View Report
               </Link>
               <div className="flex gap-3">
-                {business.analysis_count && business.analysis_count >= 2 && (
+                {FEATURES.ENABLE_DELTA_ANALYSIS && business.analysis_count && business.analysis_count >= 2 && (
                   <Link
                     to={`/delta/${business.latest_analysis.id}`}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-lg transition-all shadow-lg hover:shadow-xl"

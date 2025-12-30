@@ -22,6 +22,7 @@ import { compareAnalyses, saveDeltaAnalysis } from '../lib/deltaAnalysis';
 import { PaymentModal } from '../components/PaymentModal';
 import { FIRST_ANALYSIS_PRICE, REANALYSIS_PRICE } from '../lib/stripe';
 import { supabase } from '../lib/supabase';
+import { FEATURES } from '../config/features';
 
 type ViewState = 'landing' | 'loading' | 'results' | 'extraction_error';
 type LoadingStage = 'fetching' | 'fallback' | 'analyzing';
@@ -548,21 +549,26 @@ export function LandingPage() {
         console.log('[Analytics] Checking for baseline analysis');
         const baselineAnalysis = await getBaselineAnalysis(business.id);
 
-        if (baselineAnalysis) {
-          console.log('[Analytics] Running delta comparison');
-          setLoadingMessage('Comparing with baseline analysis...');
+      if (baselineAnalysis && FEATURES.ENABLE_DELTA_ANALYSIS) {
+        console.log('[Analytics] Running delta comparison');
+        setLoadingMessage('Comparing with baseline analysis...');
 
-          const deltaData = await compareAnalyses(baselineAnalysis.id, analysisId);
+        const deltaData = await compareAnalyses(baselineAnalysis.id, analysisId);
 
-          console.log('[Analytics] Saving delta analysis');
+        console.log('[Analytics] Saving delta analysis');
+        if (deltaData) {
           await saveDeltaAnalysis(analysisId, baselineAnalysis.id, deltaData);
-
           console.log('[Analytics] Delta comparison saved');
           setCopyToastMessage('Follow-up analysis complete - comparison with baseline saved!');
           hasDelta = true;
         } else {
           setCopyToastMessage('Analysis saved successfully!');
         }
+      } else if (baselineAnalysis) {
+        setCopyToastMessage('Analysis saved successfully!');
+      } else {
+        setCopyToastMessage('Analysis saved successfully!');
+      }
       } else {
         setCopyToastMessage('Baseline analysis saved successfully!');
       }
@@ -1060,13 +1066,15 @@ export function LandingPage() {
                   <Download className="w-5 h-5" />
                   Download PDF
                 </button>
-                <button
-                  onClick={handleShareReport}
-                  className="flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
-                >
-                  <Share2 className="w-5 h-5" />
-                  Share Report
-                </button>
+                {FEATURES.ENABLE_EMAIL_SHARING && (
+                  <button
+                    onClick={handleShareReport}
+                    className="flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all shadow-lg hover:shadow-xl"
+                  >
+                    <Share2 className="w-5 h-5" />
+                    Share Report
+                  </button>
+                )}
                 <button
                   onClick={handleStartNew}
                   className="flex items-center justify-center gap-2 px-6 py-3 border-2 border-slate-300 hover:border-slate-400 bg-white text-slate-900 font-semibold rounded-lg transition-colors"

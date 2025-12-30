@@ -7,6 +7,12 @@ const corsHeaders = {
 };
 
 export default async function handler(req: any, res: any) {
+  console.log('[free-run-analysis] Handler started');
+  console.log('[free-run-analysis] Environment check:', {
+    hasSupabaseUrl: !!process.env.VITE_SUPABASE_URL,
+    hasAnonKey: !!process.env.VITE_SUPABASE_ANON_KEY,
+    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  });
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
@@ -20,13 +26,9 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  try {
-    // Check if free mode is enabled
-    if (process.env.PAYMENTS_DISABLED !== 'true') {
-      res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
-      return res.status(403).json({ error: 'Free mode disabled' });
-    }
+  console.log('[free-run-analysis] Starting free analysis request');
 
+  try {
     // Get auth token
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -46,8 +48,17 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: 'Supabase configuration missing' });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    const supabaseService = createClient(supabaseUrl, supabaseServiceRoleKey);
+    let supabase;
+    let supabaseService;
+    try {
+      console.log('[free-run-analysis] Creating Supabase client...');
+      supabase = createClient(supabaseUrl, supabaseAnonKey);
+      supabaseService = createClient(supabaseUrl, supabaseServiceRoleKey);
+      console.log('[free-run-analysis] Supabase client created successfully');
+    } catch (error) {
+      console.error('[free-run-analysis] Failed to create Supabase client:', error);
+      throw error;
+    }
 
     // Verify user
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -241,15 +252,15 @@ export default async function handler(req: any, res: any) {
       success: true,
       analysisId,
       reportId: reportId || undefined,
-      status: 'extracting',
+      message: 'Free analysis started',
     });
   } catch (error) {
     console.error('[free-run-analysis] Error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     res.setHeader('Access-Control-Allow-Origin', corsHeaders['Access-Control-Allow-Origin']);
     return res.status(500).json({
-      success: false,
-      error: errorMessage,
+      error: 'Free analysis failed',
+      details: errorMessage,
     });
   }
 }
